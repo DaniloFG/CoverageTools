@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { createPythonAdapter, pytestConfigHasCov, pythonAdapter, resolveInterpreter } from '../../../src/adapters/python';
+import { createPythonAdapter, PROBE_SCRIPT, pytestConfigHasCov, pythonAdapter, resolveInterpreter } from '../../../src/adapters/python';
 import type { CommandSpec, FsReader, PlanContext, Project, RunTarget } from '../../../src/adapters/types';
 import { matchesAny } from '../../../src/glob';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/settings';
@@ -226,6 +226,38 @@ describe('plan', () => {
     ]);
   });
 
+  test('unittest: a file or directory inside another listed directory is not run twice', async () => {
+    const target: RunTarget = { kind: 'partial', paths: [
+      path.join(DIR, 'tests', 'test_a.py'), path.join(DIR, 'tests'), path.join(DIR, 'tests', 'unit'),
+      path.join(DIR, 'other', 'test_b.py'), path.join(DIR, 'other', 'test_b.py'), path.join(DIR, 'tests'),
+    ] };
+    const { ctx } = context(COVERAGE_ONLY, { files: venv });
+    const plan = await adapter.plan(project, target, ctx);
+    const run = ['-m', 'coverage', 'run', '--append', `--data-file=${COVERAGE_FILE}`, '-m', 'unittest'];
+    expect(plan.steps.map(s => s.args)).toEqual([
+      [...run, path.join('other', 'test_b.py')],
+      [...run, 'discover', '-s', 'tests'],
+      ['-m', 'coverage', 'xml', `--data-file=${COVERAGE_FILE}`, '-o', XML],
+    ]);
+  });
+
+  test('the workspace folder in project.meta bounds the search for a parent pytest configuration', async () => {
+    const files = { ...venv, [path.join(path.dirname(DIR), 'pytest.ini')]: '[pytest]\naddopts = --cov=pkg\n' };
+    const inside = context(ALL, { files });
+    expect((await adapter.plan(project, FULL, inside.ctx)).steps[0].args).toEqual(['-m', 'pytest', `--cov-report=xml:${XML}`]);
+    const bounded = context(ALL, { files });
+    const own = { ...project, meta: { workspaceFolder: DIR } };
+    expect((await adapter.plan(own, FULL, bounded.ctx)).steps[0].args).toEqual(['-m', 'pytest', '--cov', `--cov-report=xml:${XML}`]);
+  });
+
+  test('the probe drops the working directory from sys.path before importing anything else', () => {
+    expect(PROBE_SCRIPT.startsWith("import sys; sys.path[:] = [p for p in sys.path if p != '']; ")).toBe(true);
+    expect(PROBE_SCRIPT.indexOf('import importlib')).toBeGreaterThan(PROBE_SCRIPT.indexOf('sys.path[:]'));
+    expect(PROBE_SCRIPT).not.toContain('"');
+    const { ctx, probes } = context(ALL, { files: venv });
+    return adapter.plan(project, FULL, ctx).then(() => expect(probes[0].args).toEqual(['-c', PROBE_SCRIPT]));
+  });
+
   test('a partial run of the project directory itself passes "."', async () => {
     const { ctx } = context(ALL, { files: venv });
     const plan = await adapter.plan(project, { kind: 'partial', paths: [DIR] }, ctx);
@@ -253,6 +285,40 @@ describe('pytestConfigHasCov', () => {
 
   test('no configuration file: false', async () => {
     expect(await pytestConfigHasCov(DIR, memFs({}))).toBe(false);
+  });
+
+  const at = (file: string) => path.join(DIR, file);
+  test.each([
+    ['pytest.ini without --cov wins over a stale --cov in pyproject.toml', { 'pytest.ini': '[pytest]\naddopts = -q\n', 'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "--cov=pkg"\n' }, false],
+    ['pytest.ini wins even without a [pytest] section', { 'pytest.ini': '# empty\n', 'tox.ini': '[pytest]\naddopts = --cov=pkg\n' }, false],
+    ['.pytest.ini is read', { '.pytest.ini': '[pytest]\naddopts = --cov=pkg\n' }, true],
+    ['.pytest.ini wins over pyproject.toml', { '.pytest.ini': '[pytest]\n', 'pyproject.toml': '[tool.pytest]\naddopts = ["--cov"]\n' }, false],
+    ['pyproject.toml without a pytest table is skipped', { 'pyproject.toml': '[project]\nname = "x"\n', 'tox.ini': '[pytest]\naddopts = --cov=pkg\n' }, true],
+    ['pyproject.toml with a pytest table wins over tox.ini', { 'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-q"\n', 'tox.ini': '[pytest]\naddopts = --cov=pkg\n' }, false],
+    ['tox.ini with [pytest] wins over setup.cfg', { 'tox.ini': '[pytest]\naddopts = -q\n', 'setup.cfg': '[tool:pytest]\naddopts = --cov=pkg\n' }, false],
+    ['tox.ini without [pytest] is skipped', { 'tox.ini': '[tox]\nenvlist = py313\n', 'setup.cfg': '[tool:pytest]\naddopts = --cov=pkg\n' }, true],
+  ])('precedence: %s', async (_name, files, expected) => {
+    const fs = memFs(Object.fromEntries(Object.entries(files).map(([f, text]) => [at(f), text])));
+    expect(await pytestConfigHasCov(DIR, fs)).toBe(expected);
+  });
+
+  test('a configuration only in a parent directory is honored; a nearer selected file stops the search', async () => {
+    const root = path.resolve('/work');
+    const parentIni = { [path.join(root, 'pytest.ini')]: '[pytest]\naddopts = --cov=pkg\n' };
+    expect(await pytestConfigHasCov(DIR, memFs(parentIni))).toBe(true);
+    expect(await pytestConfigHasCov(DIR, memFs({ ...parentIni, [at('pyproject.toml')]: '[project]\nname = "x"\n' }))).toBe(true);
+    expect(await pytestConfigHasCov(DIR, memFs({ ...parentIni, [at('setup.cfg')]: '[tool:pytest]\naddopts = -q\n' }))).toBe(false);
+  });
+
+  test('the parent search stops at the workspace folder, or five levels up without one', async () => {
+    const parentIni = { [path.resolve('/work/pytest.ini')]: '[pytest]\naddopts = --cov=pkg\n' };
+    expect(await pytestConfigHasCov(DIR, memFs(parentIni), DIR)).toBe(false);
+    expect(await pytestConfigHasCov(DIR, memFs(parentIni), path.resolve('/work'))).toBe(true);
+
+    const deep = path.resolve('/a/b/c/d/e/f/proj');
+    const ini = (dir: string) => memFs({ [path.join(dir, 'pytest.ini')]: '[pytest]\naddopts = --cov\n' });
+    expect(await pytestConfigHasCov(deep, ini(path.resolve('/a/b')))).toBe(true); // 5 levels up
+    expect(await pytestConfigHasCov(deep, ini(path.resolve('/a')))).toBe(false); // 6 levels up
   });
 });
 

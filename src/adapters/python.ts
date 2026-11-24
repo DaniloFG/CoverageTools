@@ -8,18 +8,30 @@ const TEST_FILE_NAME = /^(test_.*|.*_test)\.py$/;
 /** Directories whose files never count as the project's test files (the default excludes). */
 const SKIPPED_DIRS = new Set(['node_modules', 'bin', 'obj', '.venv', 'venv', '__pycache__']);
 
-/** The pytest sections of each configuration file pytest reads, as regexes on a section header line. */
-const PYTEST_SECTIONS: ReadonlyArray<{ file: string; header: RegExp; toml: boolean }> = [
-  { file: 'pytest.ini', header: /^\[\s*pytest\s*\]$/, toml: false },
-  { file: 'pyproject.toml', header: /^\[\s*tool\.pytest(\.ini_options)?\s*\]$/, toml: true },
-  { file: 'setup.cfg', header: /^\[\s*tool:pytest\s*\]$/, toml: false },
-  { file: 'tox.ini', header: /^\[\s*pytest\s*\]$/, toml: false },
+/**
+ * The configuration files pytest picks from, in its order of precedence: in a directory it reads
+ * the first of these that exists (`always`) or that has a pytest section, and only that one.
+ */
+const PYTEST_CONFIGS: ReadonlyArray<{ file: string; header: RegExp; toml: boolean; always: boolean }> = [
+  { file: 'pytest.ini', header: /^\[\s*pytest\s*\]$/, toml: false, always: true },
+  { file: '.pytest.ini', header: /^\[\s*pytest\s*\]$/, toml: false, always: true },
+  { file: 'pyproject.toml', header: /^\[\s*tool\.pytest(\.ini_options)?\s*\]$/, toml: true, always: false },
+  { file: 'tox.ini', header: /^\[\s*pytest\s*\]$/, toml: false, always: false },
+  { file: 'setup.cfg', header: /^\[\s*tool:pytest\s*\]$/, toml: false, always: false },
 ];
+/** Without a workspace folder to stop at, how many parent directories are searched for a configuration. */
+const MAX_CONFIG_LEVELS_UP = 5;
 /** `--cov` or `--cov=<source>` as an option of its own (not `--cov-report`, `--no-cov`…). */
 const COV_OPTION = /(?:^|[\s"',[])--cov(?=$|[=\s"',\]])/;
 
-/** Prints which of the tools the adapter can use are importable by the interpreter. */
-const PROBE_SCRIPT =
+/**
+ * Prints which of the tools the adapter can use are importable by the interpreter. With `-c` the
+ * working directory (the project) comes first on sys.path as '', so it is dropped before anything
+ * else is imported: a project's own json.py, pytest.py or coverage/ must neither break the probe
+ * nor pass for an installed tool. (Not `-I`, which would also drop PYTHONPATH and user site.)
+ */
+export const PROBE_SCRIPT =
+  "import sys; sys.path[:] = [p for p in sys.path if p != '']; " +
   "import importlib.util as u, json; print(json.dumps({m: u.find_spec(m) is not None for m in ('pytest', 'pytest_cov', 'coverage')}))";
 
 const NO_COVERAGE_HINT = 'No coverage tool found in this project\'s Python environment. Install "coverage" or "pytest-cov".';
@@ -68,32 +80,57 @@ function stripComment(line: string, toml: boolean): string {
   return line.replace(inline, '');
 }
 
-/** The lines of the section whose header matches `header`, comments removed. */
-function sectionLines(text: string, header: RegExp, toml: boolean): string[] {
+/** The lines of the section whose header matches `header`, comments removed; undefined without that section. */
+function sectionLines(text: string, header: RegExp, toml: boolean): string[] | undefined {
   const out: string[] = [];
   let inside = false;
+  let found = false;
   for (const raw of text.split(/\r?\n/)) {
     const trimmed = raw.trim();
     if (trimmed.startsWith('[') && /^\[[^\]]*\]\s*(#.*)?$/.test(trimmed)) {
       inside = header.test(trimmed.replace(/\s*#.*$/, ''));
+      found ||= inside;
       continue;
     }
     if (inside) out.push(stripComment(raw, toml));
   }
-  return out;
+  return found ? out : undefined;
+}
+
+/** The pytest section of the configuration file pytest would read in `dir`; undefined when it reads none there. */
+async function selectedConfig(dir: string, fs: FsReader): Promise<string[] | undefined> {
+  for (const { file, header, toml, always } of PYTEST_CONFIGS) {
+    const text = await fs.readText(path.join(dir, file));
+    if (text === undefined) continue;
+    const lines = sectionLines(text, header, toml);
+    if (lines !== undefined) return lines;
+    if (always) return [];
+  }
+  return undefined;
 }
 
 /**
- * Whether the project's pytest configuration (pytest.ini, pyproject.toml, setup.cfg, tox.ini, in
- * the project directory) already passes `--cov`: a plain text search inside the pytest sections.
+ * Whether the pytest configuration that applies to the project already passes `--cov`: a plain
+ * text search inside the pytest section of the one file pytest would select, looked for in the
+ * project directory and then in its parents, up to `stopAt` (inclusive) when given, else up to
+ * five levels up.
  */
-export async function pytestConfigHasCov(projectDir: string, fs: FsReader): Promise<boolean> {
-  for (const { file, header, toml } of PYTEST_SECTIONS) {
-    const text = await fs.readText(path.join(projectDir, file));
-    if (text === undefined) continue;
-    if (sectionLines(text, header, toml).some(line => COV_OPTION.test(line))) return true;
+export async function pytestConfigHasCov(projectDir: string, fs: FsReader, stopAt?: string): Promise<boolean> {
+  const stop = stopAt === undefined ? undefined : path.resolve(stopAt);
+  let dir = path.resolve(projectDir);
+  for (let level = 0; ; level++) {
+    const lines = await selectedConfig(dir, fs);
+    if (lines !== undefined) return lines.some(line => COV_OPTION.test(line));
+    const parent = path.dirname(dir);
+    const atLimit = stop === undefined ? level >= MAX_CONFIG_LEVELS_UP : dir === stop || !isInside(parent, stop);
+    if (atLimit || parent === dir) return false;
+    dir = parent;
   }
-  return false;
+}
+
+function isInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 function parseProbe(stdout: string): Installed | undefined {
@@ -127,11 +164,17 @@ function relativeTo(dir: string, p: string): string {
   return path.relative(dir, p) || '.';
 }
 
-/** The `unittest` argument lists of a run: one for all files, then one per directory. */
+/**
+ * The `unittest` argument lists of a run: one for all files, then one per directory. A file or
+ * directory inside another listed directory is left out, as that directory's run already has it.
+ */
 function unittestRuns(project: Project, target: RunTarget, extraArgs: readonly string[]): string[][] {
   if (target.kind === 'full') return [['discover', ...extraArgs]];
-  const files = target.paths.filter(p => p.toLowerCase().endsWith('.py'));
-  const dirs = target.paths.filter(p => !p.toLowerCase().endsWith('.py'));
+  const isFile = (p: string) => p.toLowerCase().endsWith('.py');
+  const allDirs = target.paths.filter(p => !isFile(p)).map(p => path.resolve(p));
+  const coveredByOther = (p: string) => allDirs.some(d => d !== p && isInside(p, d));
+  const files = [...new Set(target.paths.filter(isFile).map(p => path.resolve(p)))].filter(p => !coveredByOther(p));
+  const dirs = [...new Set(allDirs)].filter(d => !coveredByOther(d));
   const runs: string[][] = [];
   if (files.length > 0) runs.push([...extraArgs, ...files.map(p => relativeTo(project.dir, p))]);
   for (const dir of dirs) runs.push(['discover', ...extraArgs, '-s', relativeTo(project.dir, dir)]);
@@ -189,7 +232,8 @@ export function createPythonAdapter(options: PythonAdapterOptions = {}): Adapter
       const convert = step(['-m', 'coverage', 'xml', `--data-file=${dataFile}`, '-o', xml]);
 
       if (installed.pytest && installed.pytest_cov) {
-        const cov = (await pytestConfigHasCov(project.dir, ctx.fs)) ? [] : ['--cov'];
+        const stopAt = typeof project.meta.workspaceFolder === 'string' ? project.meta.workspaceFolder : undefined;
+        const cov = (await pytestConfigHasCov(project.dir, ctx.fs, stopAt)) ? [] : ['--cov'];
         return {
           steps: [step(['-m', 'pytest', ...cov, `--cov-report=xml:${xml}`, ...extraArgs, ...paths])],
           reportSearchDir, hint: NO_REPORT_HINT,

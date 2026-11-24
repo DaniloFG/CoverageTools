@@ -1,13 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { pythonAdapter } from '../../src/adapters/python';
-import type { Project, RunTarget } from '../../src/adapters/types';
+import type { PlanContext, Project, RunTarget } from '../../src/adapters/types';
 import { loadReport } from '../../src/parsers/load';
 import { exec } from '../../src/runner/exec';
 import { runProject } from '../../src/runner/runProject';
+import { DEFAULT_SETTINGS } from '../../src/settings';
 import { CoverageStore } from '../../src/store';
 import { conversionSpec } from '../../src/watcher/coveragepy';
 import { createRealDeps, linesOf, nodeFsReader, sampleDir, type RealDeps } from './helpers';
@@ -208,4 +209,35 @@ describe('coverage.py data conversion', () => {
     store.replace('project', report.files);
     expect(covered(store, path.join(project, 'calc.py'))).toEqual(ALL_BUT_RAISE);
   });
+});
+
+test('the probe is not fooled by project files named json.py, pytest.py or coverage/', async () => {
+  const project = realpathSync(mkdtempSync(path.join(tmpdir(), 'ct-pydecoy-')));
+  try {
+    writeFileSync(path.join(project, 'json.py'), 'raise ImportError("decoy json")\n');
+    writeFileSync(path.join(project, 'pytest.py'), 'raise ImportError("decoy pytest")\n');
+    mkdirSync(path.join(project, 'pytest_cov'));
+    writeFileSync(path.join(project, 'pytest_cov', '__init__.py'), '');
+    writeFileSync(path.join(project, 'test_x.py'), 'def test_x():\n    pass\n');
+    // The unittest sample's environment has coverage only: the decoys must not pass for pytest or pytest-cov.
+    const python = venvPython(sampleDir('python-unittest'));
+    const probes: string[] = [];
+    const ctx: PlanContext = {
+      tmpDir: path.join(project, 'tmp'), fs: nodeFsReader(), c8Bin: '',
+      settings: { ...DEFAULT_SETTINGS, pythonInterpreter: python },
+      probe: async spec => {
+        let stdout = '';
+        const { code } = await exec(spec, { onOutput: c => { stdout += c; }, signal: new AbortController().signal });
+        probes.push(stdout);
+        return { code, stdout };
+      },
+    };
+    const detected = await pythonAdapter.detect(project, nodeFsReader());
+    if (detected === undefined) throw new Error('decoy project not detected');
+    const plan = await pythonAdapter.plan(detected, { kind: 'full' }, ctx);
+    expect(probes).toEqual(['{"pytest": false, "pytest_cov": false, "coverage": true}\n']);
+    expect(plan.steps[0].args).toEqual(['-m', 'coverage', 'run', `--data-file=${path.join(ctx.tmpDir, '.coverage')}`, '-m', 'unittest', 'discover']);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
 });
