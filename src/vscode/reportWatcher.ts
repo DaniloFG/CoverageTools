@@ -1,13 +1,18 @@
+import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
+import os from 'node:os';
 import nodePath from 'node:path';
 import * as vscode from 'vscode';
-import type { Project } from '../adapters/types';
+import { resolveInterpreter } from '../adapters/python';
+import type { FsReader, Project } from '../adapters/types';
 import { matchesAny } from '../glob';
 import { formatOf } from '../parsers/load';
 import { NotCoverageReportError, ReportParseError, type ParsedReport } from '../parsers/types';
+import { exec } from '../runner/exec';
 import type { Settings } from '../settings';
 import type { CoverageStore } from '../store';
 import { isWithin, ownerOf, unownedKey } from '../watcher/attribution';
 import { ReportBatcher, type IngestResult } from '../watcher/batcher';
+import { ingestCoverageData } from '../watcher/coveragepy';
 
 /** Quiet time after the last event of a group before its report is read. */
 const WATCH_DEBOUNCE_MS = 750;
@@ -17,24 +22,40 @@ const RETRY_MS = 1_000;
 export interface ReportWatcherDeps {
   store: CoverageStore;
   parser: { parse(reportPath: string, roots: readonly string[]): Promise<ParsedReport> };
-  settingsOf(folder: vscode.Uri): Settings;
+  /** The settings that apply to a workspace folder or a file in it. */
+  settingsOf(scope: vscode.Uri): Settings;
   projects(): readonly Project[];
   /** Whether reports of this group (a project key, or `dir:<directory>`) are to be ignored for now. */
   isSuppressed(key: string): boolean;
+  /** Workspace Trust; coverage.py data files are only converted in a trusted workspace. */
+  isTrusted(): boolean;
+  /** The interpreter selected in the Python extension for a file, if it is installed and active. */
+  pythonSelection(uri: vscode.Uri): string | undefined;
   log(msg: string): void;
 }
+
+/** What interpreter resolution reads: whether a venv interpreter exists. */
+const interpreterFs: FsReader = {
+  exists: p => stat(p).then(() => true, () => false),
+  readText: p => readFile(p, 'utf8').catch(() => undefined),
+  find: () => Promise.reject(new Error('Not used by interpreter resolution')),
+};
 
 /**
  * Picks up coverage reports written outside the extension (terminal, tasks, scripts): one file
  * system watcher per workspace folder and report glob, debounced per project, then parsed in the
- * worker and stored under the owning project (or under an `unowned:` key). Reports already on
- * disk are not loaded. Creating the watchers reads no file and starts no timer.
+ * worker and stored under the owning project (or under an `unowned:` key). coverage.py data files
+ * (`.coverage`) are first converted to Cobertura with the project's interpreter, in trusted
+ * workspaces only. Reports already on disk are not loaded. Creating the watchers reads no file,
+ * starts no timer and probes no interpreter.
  */
 export class ReportWatcher {
   private readonly batcher: ReportBatcher;
   private watchers: vscode.Disposable[] = [];
   private readonly subscriptions: vscode.Disposable[];
   private disposed = false;
+  /** Aborted on dispose: stops a running coverage.py conversion. */
+  private readonly abort = new AbortController();
 
   constructor(private readonly deps: ReportWatcherDeps) {
     this.batcher = new ReportBatcher({
@@ -56,6 +77,7 @@ export class ReportWatcher {
 
   dispose(): void {
     this.disposed = true;
+    this.abort.abort();
     for (const d of [...this.subscriptions, ...this.watchers]) d.dispose();
     this.watchers = [];
     this.batcher.dispose();
@@ -100,10 +122,38 @@ export class ReportWatcher {
     return ownerOf(path, this.deps.projects())?.key ?? `dir:${nodePath.dirname(path)}`;
   }
 
+  private roots(): string[] {
+    return (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+  }
+
+  private keyOf(path: string, signature: string): string {
+    return ownerOf(path, this.deps.projects())?.key ?? unownedKey(path, signature);
+  }
+
+  /** coverage.py data: converted with the interpreter of the owning project, or of the file's directory. */
+  private ingestCoverageData(path: string): Promise<IngestResult> {
+    return ingestCoverageData(path, {
+      isTrusted: () => this.deps.isTrusted(),
+      interpreterFor: file => {
+        const uri = vscode.Uri.file(file);
+        const dir = ownerOf(file, this.deps.projects())?.dir ?? nodePath.dirname(file);
+        return resolveInterpreter(dir, this.deps.settingsOf(uri), interpreterFs, this.deps.pythonSelection(uri));
+      },
+      exec,
+      parse: (report, roots) => this.deps.parser.parse(report, roots),
+      makeTempDir: async () => mkdtemp(nodePath.join(await realpath(os.tmpdir()), 'coverage-tools-')),
+      removeDir: dir => rm(dir, { recursive: true, force: true }),
+      store: this.deps.store,
+      keyOf: (file, signature) => this.keyOf(file, signature),
+      roots: () => this.roots(),
+      log: msg => this.deps.log(msg),
+      signal: this.abort.signal,
+    });
+  }
+
   private async ingest(path: string): Promise<IngestResult> {
-    // coverage.py data files need converting first, which arrives with Python support.
-    if (formatOf(path) === 'coveragepy') return 'drop';
-    const roots = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+    if (formatOf(path) === 'coveragepy') return this.ingestCoverageData(path);
+    const roots = this.roots();
     let report: ParsedReport;
     try {
       report = await this.deps.parser.parse(path, roots);
@@ -117,8 +167,7 @@ export class ReportWatcher {
       return 'drop';
     }
     if (this.disposed) return 'drop';
-    const owner = ownerOf(path, this.deps.projects());
-    this.deps.store.replace(owner ? owner.key : unownedKey(path, report.signature), report.files);
+    this.deps.store.replace(this.keyOf(path, report.signature), report.files);
     return 'ok';
   }
 }

@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { CoverageStore } from './store';
 import { readSettings } from './vscode/config';
 import { Publisher } from './vscode/publisher';
+import { selectedPythonInterpreter } from './vscode/pythonExtension';
 import { ReportWatcher } from './vscode/reportWatcher';
 import { StatusBar } from './vscode/statusBar';
 import { ParserClient } from './worker/client';
@@ -23,13 +24,16 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
     channel ??= vscode.window.createOutputChannel('Coverage Tools', { log: true });
     channel.info(msg);
   };
-  // Reading static reports runs no code, so it stays on in untrusted workspaces.
+  // Reading static reports runs no code, so it stays on in untrusted workspaces; converting
+  // coverage.py data runs an interpreter, so the watcher skips it there.
   const watcher = new ReportWatcher({
     store,
     parser,
     settingsOf: readSettings,
     projects: () => [],
     isSuppressed: () => false,
+    isTrusted: () => vscode.workspace.isTrusted,
+    pythonSelection: selectedPythonInterpreter,
     log,
   });
   context.subscriptions.push(

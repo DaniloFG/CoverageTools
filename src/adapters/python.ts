@@ -72,6 +72,21 @@ export async function resolveInterpreter(
   return 'python3';
 }
 
+/**
+ * Runs `attempt` with the resolved interpreter; when that is the `python3` fallback and the attempt
+ * fails (returns undefined: it could not be started), tries `python` once. Returns the interpreter
+ * that worked, or the original one when neither did.
+ */
+export async function withPythonFallback<T>(
+  python: string,
+  attempt: (python: string) => Promise<T | undefined>,
+): Promise<{ python: string; result: T | undefined }> {
+  const result = await attempt(python);
+  if (result !== undefined || python !== 'python3') return { python, result };
+  const second = await attempt('python');
+  return second === undefined ? { python, result } : { python: 'python', result: second };
+}
+
 /** Removes a comment from one line: a whole-line `#`/`;` comment, or a `#` (INI: also `;`) after whitespace. */
 function stripComment(line: string, toml: boolean): string {
   const trimmed = line.trim();
@@ -215,12 +230,8 @@ export function createPythonAdapter(options: PythonAdapterOptions = {}): Adapter
 
     async plan(project, target, ctx): Promise<RunPlan> {
       const selected = await options.selectedInterpreter?.(project.dir);
-      let python = await resolveInterpreter(project.dir, ctx.settings, ctx.fs, selected, platform);
-      let installed = await probeInterpreter(python, project.dir, ctx);
-      if (installed === undefined && python === 'python3') {
-        installed = await probeInterpreter('python', project.dir, ctx);
-        if (installed !== undefined) python = 'python';
-      }
+      const resolved = await resolveInterpreter(project.dir, ctx.settings, ctx.fs, selected, platform);
+      const { python, result: installed } = await withPythonFallback(resolved, p => probeInterpreter(p, project.dir, ctx));
       const reportSearchDir = ctx.tmpDir;
       if (installed === undefined) return { steps: [], reportSearchDir, hint: cannotRunHint(python) };
 

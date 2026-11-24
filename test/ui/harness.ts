@@ -10,6 +10,8 @@ export interface LaunchOptions {
   settings?: object;
   /** Extra environment variables for the VS Code process (merged over the test process's own). */
   env?: Record<string, string>;
+  /** False: Workspace Trust stays on and the workspace opens untrusted (Restricted Mode). Default true. */
+  trusted?: boolean;
 }
 
 export interface RunCommandOptions {
@@ -60,6 +62,14 @@ const BASE_SETTINGS = {
   'window.restoreWindows': 'none',
   'workbench.secondarySideBar.defaultVisibility': 'hidden',
   'git.openRepositoryInParentFolders': 'never',
+};
+
+/** With Workspace Trust on, a fresh profile trusts nothing; no prompt or banner covers the window. */
+const UNTRUSTED_SETTINGS = {
+  'security.workspace.trust.enabled': true,
+  'security.workspace.trust.startupPrompt': 'never',
+  'security.workspace.trust.banner': 'never',
+  'security.workspace.trust.emptyWindow': false,
 };
 
 /** Every session not closed yet, so `closeAll` can clean up after a failed or timed-out test. */
@@ -124,6 +134,39 @@ export function istanbul(files: Record<string, ReadonlyArray<readonly [number, n
     root[path] = { path, statementMap, s: counts, fnMap: {}, f: {}, branchMap: {}, b: {} };
   }
   return JSON.stringify(root, null, 2);
+}
+
+/** The text of the coverage tree row for `name`. */
+export async function coverageRowText(s: VSCodeSession, name: string): Promise<string> {
+  const row = s.page.locator(`${COVERAGE_VIEW} ${COVERAGE_ROW}`, { hasText: name }).first();
+  return (await row.innerText({ timeout: 10_000 })).trim();
+}
+
+/** Brings coverage on screen and waits until the row for `name` shows `percent` (e.g. '33.33%'). */
+export async function waitForCoverageRow(s: VSCodeSession, name: string, percent: string): Promise<void> {
+  await s.coverageViewText(name);
+  const pattern = new RegExp(`(^|[^\\d.])${percent.replace('.', '\\.')}`);
+  await waitFor(async () => pattern.test(await coverageRowText(s, name)), 10_000, `the ${name} row to show ${percent}`);
+}
+
+/**
+ * The text of the Coverage Tools output channel ('' while nothing was logged, as the channel is
+ * created on the first message), with the editor's soft line breaks removed: long entries wrap.
+ */
+export async function outputChannelText(s: VSCodeSession): Promise<string> {
+  await s.runCommand('Output: Show Output Channels...', { expectQuickInput: true });
+  const entry = s.page.locator('.quick-input-list .monaco-list-row', {
+    has: s.page.locator('.label-name', { hasText: /^Coverage Tools$/ }),
+  }).first();
+  try {
+    await entry.waitFor({ state: 'visible', timeout: 2_000 });
+  } catch {
+    await s.page.keyboard.press('Escape');
+    return '';
+  }
+  await entry.click();
+  const text = await s.page.locator('.part.panel .monaco-editor .view-lines').innerText({ timeout: 5_000 });
+  return text.replace(/\u00a0/g, ' ').replace(/\n/g, '');
 }
 
 /** Polls `fn` every 100 ms until it returns a truthy value, and returns that value. */
@@ -214,7 +257,7 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
     await mkdir(extensionsDir, { recursive: true });
     await writeFile(
       join(userDataDir, 'User', 'settings.json'),
-      JSON.stringify({ ...BASE_SETTINGS, ...opts.settings }, null, 2),
+      JSON.stringify({ ...BASE_SETTINGS, ...(opts.trusted === false ? UNTRUSTED_SETTINGS : {}), ...opts.settings }, null, 2),
     );
 
     if (closing) throw new Error('The VS Code session was closed while it was launching');
@@ -226,7 +269,7 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
         ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []),
         '--disable-gpu',
         '--disable-updates',
-        '--disable-workspace-trust',
+        ...(opts.trusted === false ? [] : ['--disable-workspace-trust']),
         '--skip-welcome',
         '--skip-release-notes',
         '--window-size=1280,800',

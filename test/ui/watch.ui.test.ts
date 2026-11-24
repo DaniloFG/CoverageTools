@@ -2,7 +2,8 @@ import { writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import {
-  closeAll, copyWorkspace, COVERAGE_ROW, COVERAGE_VIEW, istanbul, launchVSCode, lcov, waitFor, writeReport, writeReportUntil,
+  closeAll, copyWorkspace, coverageRowText, COVERAGE_VIEW, istanbul, launchVSCode, lcov, outputChannelText, waitFor,
+  waitForCoverageRow, writeReport, writeReportUntil,
   type VSCodeSession,
 } from './harness';
 
@@ -28,37 +29,10 @@ async function start(prepare?: (ws: string) => Promise<void>): Promise<void> {
 
 const statusVisible = (): Promise<boolean> => s.page.locator(STATUS_ITEM).isVisible();
 
-async function rowText(name: string): Promise<string> {
-  const row = s.page.locator(`${COVERAGE_VIEW} ${COVERAGE_ROW}`, { hasText: name }).first();
-  return (await row.innerText({ timeout: 10_000 })).trim();
-}
+const rowText = (name: string): Promise<string> => coverageRowText(s, name);
+const rowShows = (name: string, percent: string): Promise<void> => waitForCoverageRow(s, name, percent);
 
-/** Waits until the coverage row for `name` shows `percent` (e.g. '33.33%'). */
-async function rowShows(name: string, percent: string): Promise<void> {
-  await s.coverageViewText(name);
-  const pattern = new RegExp(`(^|[^\\d.])${percent.replace('.', '\\.')}`);
-  await waitFor(async () => pattern.test(await rowText(name)), 10_000, `the ${name} row to show ${percent}`);
-}
-
-/**
- * The text of the Coverage Tools output channel (it exists once something was logged), with the
- * editor's soft line breaks removed: long entries wrap.
- */
-async function outputText(): Promise<string> {
-  await s.runCommand('Output: Show Output Channels...', { expectQuickInput: true });
-  const entry = s.page.locator('.quick-input-list .monaco-list-row', {
-    has: s.page.locator('.label-name', { hasText: /^Coverage Tools$/ }),
-  }).first();
-  try {
-    await entry.waitFor({ state: 'visible', timeout: 2_000 });
-  } catch {
-    await s.page.keyboard.press('Escape');
-    return '';
-  }
-  await entry.click();
-  const text = await s.page.locator('.part.panel .monaco-editor .view-lines').innerText({ timeout: 5_000 });
-  return text.replace(/\u00a0/g, ' ').replace(/\n/g, '');
-}
+const outputText = (): Promise<string> => outputChannelText(s);
 
 test('a report written to the workspace is picked up without any command', async () => {
   await start();
