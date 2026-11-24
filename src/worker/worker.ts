@@ -15,5 +15,11 @@ port.on('message', (request: ParseRequest) => {
   } catch (e) {
     response = { id: request.id, ok: false, kind: errorKindOf(e), message: e instanceof Error ? e.message : String(e) };
   }
-  port.postMessage(response, transfer);
+  try {
+    port.postMessage(response, transfer);
+  } catch (e) {
+    // A response that cannot be posted (e.g. DataCloneError) fails only its own request, not the worker.
+    const message = `The parsed report could not be sent back: ${e instanceof Error ? e.message : String(e)}`;
+    port.postMessage({ id: request.id, ok: false, kind: 'io', message } satisfies ParseResponse);
+  }
 });

@@ -74,14 +74,20 @@ function checkCobertura(text: string): void {
   }
 }
 
-/** A tracefile starts with a `TAG:` line and, once completely written, ends with `end_of_record`. */
+/**
+ * A tracefile starts with a `TAG:` line. One with no `SF:` record (e.g. only `TN:`) is a valid empty report;
+ * one whose last `SF:` record has no `end_of_record` after it is still being written.
+ */
 function checkLcov(text: string): void {
   const start = skipSpace(text, 0);
   let end = text.indexOf('\n', start);
   if (end < 0) end = text.length;
   const first = text.slice(start, end).trimEnd();
   if (first !== 'end_of_record' && !/^[A-Z]+:/.test(first)) throw new NotCoverageReportError('Not an LCOV tracefile');
-  if (!text.trimEnd().endsWith('end_of_record')) throw new ReportParseError('Truncated LCOV: the last record is incomplete');
+  const lastRecord = text.startsWith('SF:', start) ? Math.max(start, text.lastIndexOf('\nSF:')) : text.lastIndexOf('\nSF:');
+  if (lastRecord >= 0 && text.indexOf('end_of_record', lastRecord) < 0) {
+    throw new ReportParseError('Truncated LCOV: the last record is incomplete');
+  }
 }
 
 function readReport(reportPath: string): string {

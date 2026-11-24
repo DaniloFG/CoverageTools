@@ -119,6 +119,38 @@ test('a worker crash rejects the pending requests and the next parse uses a fres
   expect(client.startedWorkers).toBe(2);
 });
 
+test('a worker that throws a non-Error value is reported with that value', async () => {
+  client.dispose();
+  client = new ParserClient(CRASHING_WORKER);
+  const error = await client.parse(path.join(root, 'crash-value'), [root]).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toMatch(/^The coverage parser worker crashed: /);
+  expect((error as Error).message).not.toMatch(/undefined$/);
+  expect((error as Error).message).toContain('42');
+});
+
+test('a request that cannot be posted is rejected without leaking a pending entry or the worker', async () => {
+  // A symbol cannot be structured-cloned, so postMessage throws synchronously.
+  const error = await client.parse(Symbol('not cloneable') as unknown as string, [root]).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).name).toBe('DataCloneError');
+  expect(client.running).toBe(false);
+  await client.idle();
+
+  const r = await client.parse(lcovPath, [root]);
+  expect(r.files).toHaveLength(1);
+  await client.idle();
+  expect(client.running).toBe(false);
+});
+
+test('a request that cannot be posted does not stop a worker that others still wait on', async () => {
+  const ok = client.parse(lcovPath, [root]);
+  await expect(client.parse(Symbol('x') as unknown as string, [root])).rejects.toThrow();
+  expect(client.running).toBe(true);
+  expect((await ok).files).toHaveLength(1);
+  expect(client.startedWorkers).toBe(1);
+});
+
 test('dispose() rejects pending requests and leaves no worker running', async () => {
   const p = client.parse(lcovPath, [root]);
   expect(client.running).toBe(true);

@@ -10,6 +10,10 @@ parentPort.on = (event, listener) => on(event, event !== 'message' ? listener : 
     crashed = true;
     throw new Error('simulated worker crash');
   }
+  if (request.reportPath.endsWith('crash-value')) {
+    crashed = true;
+    throw 42; // a thrown value that is not an Error
+  }
   listener(request);
 });
 await import(new URL('../../../../dist/worker.js', import.meta.url).href);

@@ -2,6 +2,11 @@ import { Worker } from 'node:worker_threads';
 import type { ParsedReport } from '../parsers/types';
 import { errorOf, fromWire, type ParseRequest, type ParseResponse } from './protocol';
 
+/** A thrown value as text; a worker can throw anything, not only an Error. */
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 interface Pending {
   worker: Worker;
   resolve(report: ParsedReport): void;
@@ -45,7 +50,13 @@ export class ParserClient {
     return new Promise<ParsedReport>((resolve, reject) => {
       this.pending.set(id, { worker, resolve, reject });
       const request: ParseRequest = { id, reportPath, roots: [...roots] };
-      worker.postMessage(request);
+      try {
+        worker.postMessage(request);
+      } catch (e) {
+        this.pending.delete(id);
+        reject(e instanceof Error ? e : new Error(String(e)));
+        if (this.pending.size === 0 && this.worker === worker) this.stop(worker);
+      }
     });
   }
 
@@ -60,8 +71,8 @@ export class ParserClient {
     this.started++;
     this.worker = worker;
     worker.on('message', (response: ParseResponse) => this.onResponse(response));
-    worker.on('error', error => this.onDeath(worker, `The coverage parser worker crashed: ${error.message}`));
-    worker.on('messageerror', error => this.onDeath(worker, `The coverage parser worker sent an unreadable message: ${error.message}`));
+    worker.on('error', (error: unknown) => this.onDeath(worker, `The coverage parser worker crashed: ${describe(error)}`));
+    worker.on('messageerror', (error: unknown) => this.onDeath(worker, `The coverage parser worker sent an unreadable message: ${describe(error)}`));
     worker.on('exit', code => this.onDeath(worker, `The coverage parser worker exited unexpectedly (code ${code})`));
     return worker;
   }

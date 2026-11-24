@@ -85,9 +85,19 @@ test.each([
   ['coverage.xml', '<?xml version="1.0"?><cover'],
   ['coverage.xml', '<coverage><packages>'],
   ['coverage/lcov.info', ''],
+  ['coverage/lcov.info', ' \n\n'],
   ['coverage/lcov.info', 'TN:\nSF:src/a.js\nDA:1,3\n'],
 ])('empty or truncated %s (%j) throws ReportParseError', (rel, content) => {
   expect(() => loadReport(write(rel, content), [root])).toThrow(ReportParseError);
+});
+
+test('an LCOV tracefile with content but no records is a valid empty report', () => {
+  expect(loadReport(write('coverage/lcov.info', 'TN:\n'), [root])).toEqual({ files: [], signature: '', dropped: 0 });
+  expect(loadReport(write('coverage.lcov', 'TN:test'), [root]).files).toEqual([]);
+});
+
+test('an LCOV tracefile whose last record has no end_of_record is truncated even after complete records', () => {
+  expect(() => loadReport(write('coverage/lcov.info', LCOV + 'SF:src/a.js\nDA:1,1\n'), [root])).toThrow(ReportParseError);
 });
 
 test('a file that disappeared before it was read throws ReportParseError', () => {
