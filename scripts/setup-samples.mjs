@@ -60,7 +60,7 @@ function setUp(dir) {
   if (has('requirements.txt')) {
     if (run('python3', ['-m', 'venv', '.venv'], dir)) {
       const python = IS_WINDOWS ? path.join(dir, '.venv', 'Scripts', 'python.exe') : path.join(dir, '.venv', 'bin', 'python');
-      run(python, ['-m', 'pip', 'install', '-r', 'requirements.txt'], dir);
+      run(python, ['-m', 'pip', 'install', '--disable-pip-version-check', '-r', 'requirements.txt'], dir);
     }
   }
 
