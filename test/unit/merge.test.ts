@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { EOL, FileBuilder } from '../../src/model';
 import { unionFileLists, unionFiles } from '../../src/merge';
-import { decls, file, lines } from './helpers';
+import { declRanges, decls, file, lines } from './helpers';
 
 test('union sums matching records and keeps unmatched ones from both sides', () => {
   const a = file('/w/a.ts', [[1, 1], [2, 0]]);
@@ -32,6 +32,23 @@ test('declarations match by name and start line; branches by line, col and arm',
   expect(Array.from(u.branches)).toEqual([1, 0, 0, 1, 1, 0, 1, 2, 1, 4, 0, 1]);
   expect(decls(u)).toEqual([['f', 1, 3], ['f', 9, 1], ['g', 5, 3], ['h', 2, 0]]);
   expect(u.names).toEqual(['f', 'g', 'h']);
+});
+
+test('declarations with the same start line but different names stay separate', () => {
+  const ab = new FileBuilder('/w/a.ts');
+  ab.addDeclaration('f', 4, 0, 5, 1, 1);
+  const bb = new FileBuilder('/w/a.ts');
+  bb.addDeclaration('g', 4, 0, 5, 1, 2);
+  expect(decls(unionFiles([ab.build(), bb.build()]))).toEqual([['f', 4, 1], ['g', 4, 2]]);
+});
+
+test('a matching declaration keeps the range of the first part', () => {
+  const ab = new FileBuilder('/w/a.ts');
+  ab.addDeclaration('f', 4, 2, 8, 1, 1);
+  const bb = new FileBuilder('/w/a.ts');
+  bb.addDeclaration('f', 4, 7, 9, EOL, 5);
+  expect(declRanges(unionFiles([ab.build(), bb.build()]))).toEqual([['f', 4, 2, 8, 1, 6]]);
+  expect(declRanges(unionFiles([bb.build(), ab.build()]))).toEqual([['f', 4, 7, 9, EOL, 6]]);
 });
 
 test('union of three parts sums all of them and saturates', () => {

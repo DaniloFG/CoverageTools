@@ -94,3 +94,14 @@ test('merged() returns the same array until the next mutation', () => {
   expect(second).not.toBe(first);
   expect(second.map(e => e.path)).toEqual(['/w/a.ts', '/w/b.ts']);
 });
+
+test('a throwing listener neither stops the others nor escapes the mutation', () => {
+  const s = new CoverageStore();
+  let fired = 0;
+  s.onDidChange(() => { throw new Error('listener failure'); });
+  s.onDidChange(() => fired++);
+  expect(() => s.replace('p1', [file('/w/a.ts', [[1, 1]])])).not.toThrow();
+  expect(() => s.union('p1', [file('/w/a.ts', [[2, 1]])])).not.toThrow();
+  expect(() => s.clear()).not.toThrow();
+  expect(fired).toBe(3);
+});

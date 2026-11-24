@@ -62,3 +62,28 @@ test('an empty builder yields empty arrays and zero totals', () => {
     statements: { covered: 0, total: 0 }, branches: { covered: 0, total: 0 }, declarations: { covered: 0, total: 0 },
   });
 });
+
+test('coordinates are truncated before storing, so 3 and 3.7 are one record', () => {
+  const b = new FileBuilder('/w/a.ts');
+  b.addLine(3, 1); b.addLine(3.7, 2);
+  b.addBranch(2, 1.5, 0, 1); b.addBranch(2, 1, 0.2, 4);
+  b.addDeclaration('f', 3.7, 0, 4, 1, 1); b.addDeclaration('f', 3, 0.9, 4, 1, 2);
+  const f = b.build();
+  expect(Array.from(f.statements)).toEqual([3, 0, 0, 0, 3]);
+  expect(Array.from(f.branches)).toEqual([2, 1, 0, 5]);
+  expect(Array.from(f.declarations)).toEqual([3, 0, 4, 1, 3, 0]);
+});
+
+test('non-finite or negative coordinates become 0 and keep the output sorted', () => {
+  const b = new FileBuilder('/w/a.ts');
+  b.addLine(5, 1); b.addLine(NaN, 2); b.addLine(2, 3); b.addLine(-4, 4); b.addLine(Infinity, 5);
+  b.addStatement(1, NaN, 1, 0x1ffffffff, 6);
+  b.addBranch(NaN, 0, 0, 1); b.addBranch(1, 0, 0, 1);
+  expect(Array.from(b.build().statements)).toEqual([
+    0, 0, 0, 0, 11,
+    1, 0, 1, EOL, 6,
+    2, 0, 0, 0, 3,
+    5, 0, 0, 0, 1,
+  ]);
+  expect(Array.from(b.build().branches)).toEqual([0, 0, 0, 1, 1, 0, 0, 1]);
+});

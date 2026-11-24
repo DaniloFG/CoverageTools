@@ -83,6 +83,12 @@ export class CoverageStore {
   private changed(): void {
     this.mergedCache = undefined;
     this.totalsCache = undefined;
-    for (const listener of [...this.listeners]) listener();
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch {
+        // A failing listener must not stop the others or the mutation that triggered it.
+      }
+    }
   }
 }

@@ -43,6 +43,12 @@ function toCount(value: number): number {
   return value >= MAX_COUNT ? MAX_COUNT : Math.trunc(value);
 }
 
+/** Normalizes a line, column or arm: non-finite or negative → 0, else truncated and capped at 0xffffffff. */
+function toCoord(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return value >= 0xffffffff ? 0xffffffff : Math.trunc(value);
+}
+
 function countRecords(records: Uint32Array, stride: number, countOffset: number): Count {
   let covered = 0;
   for (let i = countOffset; i < records.length; i += stride) if (records[i] > 0) covered++;
@@ -114,15 +120,15 @@ export class FileBuilder {
   constructor(private readonly path: string) {}
 
   addLine(line: number, count: number): void {
-    this.statements.push(line, 0, 0, 0, toCount(count));
+    this.statements.push(toCoord(line), 0, 0, 0, toCount(count));
   }
 
   addStatement(startLine: number, startCol: number, endLine: number, endCol: number, count: number): void {
-    this.statements.push(startLine, startCol, endLine, endCol, toCount(count));
+    this.statements.push(toCoord(startLine), toCoord(startCol), toCoord(endLine), toCoord(endCol), toCount(count));
   }
 
   addBranch(line: number, col: number, arm: number, count: number): void {
-    this.branches.push(line, col, arm, toCount(count));
+    this.branches.push(toCoord(line), toCoord(col), toCoord(arm), toCount(count));
   }
 
   addDeclaration(name: string, startLine: number, startCol: number, endLine: number, endCol: number, count: number): void {
@@ -131,7 +137,7 @@ export class FileBuilder {
       id = this.nameIds.size;
       this.nameIds.set(name, id);
     }
-    this.declarations.push(startLine, startCol, endLine, endCol, toCount(count), id);
+    this.declarations.push(toCoord(startLine), toCoord(startCol), toCoord(endLine), toCoord(endCol), toCount(count), id);
   }
 
   /** Sorts every kind of record by its key and sums duplicates. */
