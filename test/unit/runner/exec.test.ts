@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { exec, quoteForCmd } from '../../../src/runner/exec';
+import { cmdCommandLine, exec, quoteForCmd } from '../../../src/runner/exec';
 
 const NODE = process.execPath;
 
@@ -154,4 +154,45 @@ test('quoteForCmd quotes and escapes arguments for cmd.exe', () => {
   expect(quoteForCmd('x\\', false)).toBe('^"x\\\\^"');
   expect(quoteForCmd('a&b', false)).toBe('^"a^&b^"');
   expect(quoteForCmd('a&b', true)).toBe('^^^"a^^^&b^^^"');
+});
+
+test('cmdCommandLine normalizes the command to backslashes and quotes the arguments', () => {
+  expect(cmdCommandLine('node_modules/.bin/jest.cmd', ['--coverage', 'a b'])).toBe('node_modules\\.bin\\jest.cmd ^^^"--coverage^^^" ^^^"a^^^ b^^^"');
+  expect(cmdCommandLine('C:/Program Files/nodejs/npm.cmd', ['test'])).toBe('C:\\Program^ Files\\nodejs\\npm.cmd ^"test^"');
+  expect(cmdCommandLine('yarn', ['jest', 'x&y'])).toBe('yarn ^"jest^" ^"x^&y^"');
+});
+
+test('a grandchild that keeps the output pipe open does not keep exec waiting after its parent exits', async () => {
+  const script = [
+    'const { spawn } = require("child_process");',
+    'const g = spawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], { stdio: ["ignore", "inherit", "inherit"] });',
+    'console.log("grandchild " + g.pid);',
+    'g.unref();',
+  ].join('\n');
+  const started = Date.now();
+  const { promise, output } = run(['-e', script]);
+  const r = await promise;
+  const elapsed = Date.now() - started;
+  const pid = Number(/grandchild (\d+)/.exec(output())?.[1]);
+  if (pid) leftoverPids.push(pid);
+  expect(r).toEqual({ code: 0 });
+  expect(pid).toBeGreaterThan(0);
+  expect(elapsed).toBeLessThan(1500);
+});
+
+test.skipIf(process.platform === 'win32')('a process that ignores SIGTERM is killed with SIGKILL after the grace period', async () => {
+  const controller = new AbortController();
+  let out = '';
+  const promise = exec(
+    { command: NODE, args: ['-e', 'process.on("SIGTERM", () => console.log("ignored")); console.log("ready"); setInterval(() => {}, 1000)'], cwd: dir },
+    { onOutput: c => { out += c; }, signal: controller.signal, killGraceMs: 150 },
+  );
+  await until(() => out.includes('ready'));
+  const abortedAt = Date.now();
+  controller.abort();
+  const r = await promise;
+  expect(r).toEqual({ code: null });
+  expect(out).toContain('ignored');
+  expect(Date.now() - abortedAt).toBeGreaterThanOrEqual(140);
+  expect(Date.now() - abortedAt).toBeLessThan(1500);
 });

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { CommandSpec } from '../adapters/types';
 
@@ -29,6 +30,17 @@ function needsCmd(command: string): boolean {
   return lower.endsWith('.cmd') || lower.endsWith('.bat') || CMD_SHIMS.has(lower);
 }
 
+/**
+ * The command line given to `cmd.exe /d /s /c` for a .cmd/.bat command (without the outer quotes).
+ * The command is normalized to backslashes first: cmd.exe reads `node_modules/.bin/jest.cmd` as
+ * `node_modules` followed by a `/.bin/...` switch.
+ */
+export function cmdCommandLine(command: string, args: readonly string[]): string {
+  const normalized = path.win32.normalize(command);
+  const doubleEscape = /node_modules\\\.bin\\[^\\]+\.cmd$/i.test(normalized);
+  return [normalized.replace(CMD_META, '^$1'), ...args.map(a => quoteForCmd(a, doubleEscape))].join(' ');
+}
+
 function start(spec: CommandSpec): ChildProcess {
   const options = {
     cwd: spec.cwd,
@@ -39,8 +51,7 @@ function start(spec: CommandSpec): ChildProcess {
   };
   if (spec.shell) return spawn(spec.command, [], { ...options, shell: true });
   if (IS_WINDOWS && needsCmd(spec.command)) {
-    const doubleEscape = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(spec.command);
-    const line = [spec.command.replace(CMD_META, '^$1'), ...spec.args.map(a => quoteForCmd(a, doubleEscape))].join(' ');
+    const line = cmdCommandLine(spec.command, spec.args);
     return spawn(process.env.comspec ?? 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...options, windowsVerbatimArguments: true });
   }
   return spawn(spec.command, [...spec.args], options);
@@ -59,9 +70,13 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
  * Resolves with the exit code once the process exits (null when it was killed by a signal), also
  * after an abort; rejects only when the process could not be started (ENOENT and the like).
  * An abort kills the whole process tree: on POSIX the process runs in its own group, which gets
- * SIGTERM and, if it is still alive 3 s later, SIGKILL; on Windows `taskkill /T /F` is used.
+ * SIGTERM and, if it is still alive `killGraceMs` later (default 3,000 ms), SIGKILL; on Windows
+ * `taskkill /T /F` is used.
  */
-export function exec(spec: CommandSpec, opts: { onOutput(chunk: string): void; signal: AbortSignal }): Promise<{ code: number | null }> {
+export function exec(
+  spec: CommandSpec,
+  opts: { onOutput(chunk: string): void; signal: AbortSignal; killGraceMs?: number },
+): Promise<{ code: number | null }> {
   if (opts.signal.aborted) return Promise.resolve({ code: null });
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
@@ -86,7 +101,7 @@ export function exec(spec: CommandSpec, opts: { onOutput(chunk: string): void; s
         spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
       } else {
         signalGroup(pid, 'SIGTERM');
-        killTimer = setTimeout(() => signalGroup(pid, 'SIGKILL'), KILL_GRACE_MS);
+        killTimer = setTimeout(() => signalGroup(pid, 'SIGKILL'), opts.killGraceMs ?? KILL_GRACE_MS);
       }
     };
     opts.signal.addEventListener('abort', kill, { once: true });

@@ -28,7 +28,12 @@ export interface CommandSpec {
 
 export interface RunPlan {
   steps: readonly CommandSpec[];
-  /** Where the report is searched for after the steps ran. */
+  /**
+   * Where the report is searched for after the steps ran. It is searched recursively for known report
+   * file names only (`coverage-final.json`, `lcov.info`, `*.lcov`, `coverage.xml`, `cobertura-coverage.xml`,
+   * `*.cobertura.xml`); other JSON/XML files and `tmp`/`.nyc_output` folders are ignored. Outside the run's
+   * temp directory only reports written during the run count.
+   */
   reportSearchDir: string;
   /** Shown to the user when no report is found. */
   hint: string;

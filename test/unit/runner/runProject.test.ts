@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
@@ -199,22 +199,44 @@ test('the temp directory is outside every root and removed afterwards', async ()
   expect(existsSync(tmp)).toBe(false);
 });
 
-test('a temp directory with spaces and non-ASCII characters works as the report directory', async () => {
-  const base = path.join(root, 'temp base ção 日本');
-  mkdirSync(base);
+/** Runs `fn` with os.tmpdir() pointing at `base`. */
+async function withTmpBase<T>(base: string, fn: () => Promise<T>): Promise<T> {
   const saved = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
   process.env.TMPDIR = process.env.TMP = process.env.TEMP = base;
   try {
-    const outcome = await runProject(project, full, deps(), live());
-    expect(outcome.status).toBe('ok');
-    expect(path.dirname(seenTmpDirs[0])).toBe(base);
-    expect(store.merged().map(e => e.path)).toEqual([srcA]);
-    expect(existsSync(seenTmpDirs[0])).toBe(false);
+    return await fn();
   } finally {
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
   }
+}
+
+test('a temp directory with spaces and non-ASCII characters works as the report directory', async () => {
+  const base = path.join(root, 'temp base ção 日本');
+  mkdirSync(base);
+  const outcome = await withTmpBase(base, () => runProject(project, full, deps(), live()));
+  expect(outcome.status).toBe('ok');
+  expect(path.dirname(seenTmpDirs[0])).toBe(base);
+  expect(store.merged().map(e => e.path)).toEqual([srcA]);
+  expect(existsSync(seenTmpDirs[0])).toBe(false);
+});
+
+test('a suppress that throws still removes the temp directory and yields spawn-error', async () => {
+  const base = path.join(root, 'tmpbase');
+  mkdirSync(base);
+  const outcome = await withTmpBase(base, () => runProject(project, full, deps({ suppress: () => { throw new Error('no watcher'); } }), live()));
+  expect(outcome).toMatchObject({ status: 'spawn-error' });
+  expect(outcome.message).toContain('no watcher');
+  expect(readdirSync(base)).toEqual([]);
+  expect(events).toEqual([]);
+});
+
+test('a temp directory that cannot be created yields spawn-error instead of rejecting', async () => {
+  const outcome = await withTmpBase(path.join(root, 'does-not-exist'), () => runProject(project, full, deps(), live()));
+  expect(outcome.status).toBe('spawn-error');
+  expect(outcome.message).toMatch(/ENOENT/);
+  expect(events).toEqual([]);
 });
 
 test('the project is suppressed during the run and released at the end, even on failure', async () => {
@@ -272,4 +294,57 @@ test('abort yields cancelled and changes nothing in the store', async () => {
   expect((await runProject(project, full, deps(), controller.signal)).status).toBe('cancelled');
   expect(seenTmpDirs).toHaveLength(before);
   expect(events).toEqual([]);
+});
+
+test('raw V8 coverage under tmp is not taken for a report', async () => {
+  planFor = ctx => {
+    mkdirSync(path.join(ctx.tmpDir, 'tmp'));
+    writeFileSync(path.join(ctx.tmpDir, 'tmp', 'coverage-123-456-0.json'), JSON.stringify({ result: [] }));
+    writeFileSync(path.join(ctx.tmpDir, 'coverage-final.json.bak'), '{}');
+    writeFileSync(path.join(ctx.tmpDir, 'results.json'), '{}');
+    return { steps: [writeLcov(path.join(ctx.tmpDir, 'lcov.info'), 1)], reportSearchDir: ctx.tmpDir, hint: '' };
+  };
+  const outcome = await runProject(project, full, deps(), live());
+  expect(outcome.status).toBe('ok');
+  expect(linesOf(srcA)).toEqual([[1, 1], [2, 0]]);
+});
+
+test('a candidate that is not a coverage report gives way to the next one', async () => {
+  planFor = ctx => {
+    writeFileSync(path.join(ctx.tmpDir, 'coverage.xml'), '<?xml version="1.0"?><testsuites></testsuites>');
+    return { steps: [writeLcov(path.join(ctx.tmpDir, 'lcov.info'), 2)], reportSearchDir: ctx.tmpDir, hint: '' };
+  };
+  const outcome = await runProject(project, full, deps(), live());
+  expect(outcome.status).toBe('ok');
+  expect(linesOf(srcA)).toEqual([[1, 2], [2, 0]]);
+});
+
+test('bad-report lists every candidate when none can be read', async () => {
+  planFor = ctx => {
+    writeFileSync(path.join(ctx.tmpDir, 'coverage.xml'), '<testsuites/>');
+    return { steps: [writeLcov(path.join(ctx.tmpDir, 'lcov.info'), 1, { complete: false })], reportSearchDir: ctx.tmpDir, hint: '' };
+  };
+  const outcome = await runProject(project, full, deps(), live());
+  expect(outcome.status).toBe('bad-report');
+  expect(outcome.message).toContain('coverage.xml');
+  expect(outcome.message).toContain('lcov.info');
+  expect(store.keys()).toEqual([]);
+});
+
+test('a stale report written just before the run is not ingested', async () => {
+  const scanned = path.join(root, 'scanned');
+  mkdirSync(path.join(scanned, 'coverage'), { recursive: true });
+  writeFileSync(path.join(scanned, 'coverage', 'lcov.info'), lcov(1));
+  planFor = () => ({ steps: [{ command: NODE, args: ['-e', ''], cwd: root }], reportSearchDir: scanned, hint: 'stale hint' });
+  expect(await runProject(project, full, deps(), live())).toMatchObject({ status: 'no-report', hint: 'stale hint' });
+  expect(store.keys()).toEqual([]);
+});
+
+test('every cancelled outcome is a fresh object', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const a = await runProject(project, full, deps(), controller.signal);
+  const b = await runProject(project, full, deps(), controller.signal);
+  expect(a).toEqual({ status: 'cancelled' });
+  expect(a).not.toBe(b);
 });

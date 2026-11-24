@@ -18,3 +18,14 @@ test('defaults watch the usual report names and exclude dependency and build fol
     dotnetCollector: '', dotnetExtraArgs: [], nodeExtraArgs: [], pythonInterpreter: '', pythonExtraArgs: [], commands: {},
   });
 });
+
+test('defaults are deeply frozen so no consumer can change them for the others', () => {
+  expect(Object.isFrozen(DEFAULT_SETTINGS)).toBe(true);
+  expect(Object.isFrozen(DEFAULT_SETTINGS.watchGlobs)).toBe(true);
+  expect(Object.isFrozen(DEFAULT_SETTINGS.exclude)).toBe(true);
+  expect(Object.isFrozen(DEFAULT_SETTINGS.commands)).toBe(true);
+  expect(() => DEFAULT_SETTINGS.exclude.push('x')).toThrow(TypeError);
+  const copy = { ...DEFAULT_SETTINGS, exclude: [...DEFAULT_SETTINGS.exclude, '**/dist/**'] };
+  expect(copy.exclude).toHaveLength(7);
+  expect(DEFAULT_SETTINGS.exclude).toHaveLength(6);
+});

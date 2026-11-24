@@ -12,7 +12,16 @@ export interface Settings {
   commands: Record<string, string>;
 }
 
-export const DEFAULT_SETTINGS: Settings = {
+function deepFreeze<T extends object>(value: T): Readonly<T> {
+  for (const v of Object.values(value)) if (typeof v === 'object' && v !== null) deepFreeze(v);
+  return Object.freeze(value);
+}
+
+/**
+ * Deeply frozen: copy what you need to change (`{ ...DEFAULT_SETTINGS, exclude: [...DEFAULT_SETTINGS.exclude] }`).
+ * Typed shallowly `Readonly` so it still passes where a `Settings` is expected.
+ */
+export const DEFAULT_SETTINGS: Readonly<Settings> = deepFreeze({
   watchEnabled: true,
   watchGlobs: [
     '**/TestResults/**/*.cobertura.xml',
@@ -31,4 +40,4 @@ export const DEFAULT_SETTINGS: Settings = {
   pythonInterpreter: '',
   pythonExtraArgs: [],
   commands: {},
-};
+});
