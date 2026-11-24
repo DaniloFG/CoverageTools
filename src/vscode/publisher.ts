@@ -1,0 +1,108 @@
+import * as vscode from 'vscode';
+import { toDetails, type DeclarationDetail, type Pos, type StatementDetail } from '../details';
+import { unionFiles } from '../merge';
+import type { FileCoverageData, FileSummary } from '../model';
+import type { CoverageStore } from '../store';
+
+/** Quiet time after the last store change before the accumulated set is republished. */
+const PUBLISH_DEBOUNCE_MS = 150;
+
+/**
+ * A published file that keeps the records it was published with, so that a run kept in VS Code's
+ * history still shows what was true when it was published.
+ */
+class AccumulatedFileCoverage extends vscode.FileCoverage {
+  constructor(uri: vscode.Uri, summary: FileSummary, readonly parts: readonly FileCoverageData[]) {
+    super(
+      uri,
+      count(summary.statements),
+      summary.branches.total > 0 ? count(summary.branches) : undefined,
+      summary.declarations.total > 0 ? count(summary.declarations) : undefined,
+    );
+  }
+}
+
+function count(c: { covered: number; total: number }): vscode.TestCoverageCount {
+  return new vscode.TestCoverageCount(c.covered, c.total);
+}
+
+function position(p: Pos): vscode.Position {
+  return new vscode.Position(p.line, p.character);
+}
+
+function location(start: Pos, end: Pos | undefined): vscode.Position | vscode.Range {
+  return end ? new vscode.Range(position(start), position(end)) : position(start);
+}
+
+function toVSCode(detail: StatementDetail | DeclarationDetail): vscode.FileCoverageDetail {
+  const where = location(detail.start, detail.end);
+  if (detail.kind === 'declaration') return new vscode.DeclarationCoverage(detail.name, detail.executed, where);
+  return new vscode.StatementCoverage(
+    detail.executed,
+    where,
+    detail.branches.map(b => new vscode.BranchCoverage(b.executed, undefined, b.label)),
+  );
+}
+
+/**
+ * Publishes the accumulated coverage through the native Testing API: one coverage-only test run
+ * (no test items) per change, with line detail loaded on demand.
+ */
+export class Publisher {
+  private readonly controller: vscode.TestController;
+  private readonly profile: vscode.TestRunProfile;
+  private readonly subscription: { dispose(): void };
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly store: CoverageStore) {
+    this.controller = vscode.tests.createTestController('coverageTools', 'Coverage Tools');
+    this.profile = this.controller.createRunProfile(
+      'Coverage', vscode.TestRunProfileKind.Coverage, () => this.publishNow(), false);
+    this.profile.loadDetailedCoverage = async (_run, file) => {
+      if (!(file instanceof AccumulatedFileCoverage)) return [];
+      const data = file.parts.length === 1 ? file.parts[0] : unionFiles(file.parts);
+      return toDetails(data).map(toVSCode);
+    };
+    this.subscription = store.onDidChange(() => this.schedule());
+  }
+
+  /** Publishes the accumulated set now, cancelling a pending publication. Does nothing when it is empty. */
+  publishNow(): void {
+    this.cancelPending();
+    const entries = this.store.merged();
+    if (entries.length === 0) return;
+    const request = new vscode.TestRunRequest(undefined, undefined, this.profile);
+    const run = this.controller.createTestRun(request, 'Coverage Tools', false);
+    for (const e of entries) run.addCoverage(new AccumulatedFileCoverage(vscode.Uri.file(e.path), e.summary, e.parts));
+    run.end();
+  }
+
+  /** Closes the native coverage display. */
+  async close(): Promise<void> {
+    this.cancelPending();
+    try {
+      await vscode.commands.executeCommand('testing.coverage.close');
+    } catch {
+      // Older VS Code builds may lack the command; nothing is displayed then.
+    }
+  }
+
+  dispose(): void {
+    this.cancelPending();
+    this.subscription.dispose();
+    this.controller.dispose();
+  }
+
+  private schedule(): void {
+    this.cancelPending();
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.publishNow();
+    }, PUBLISH_DEBOUNCE_MS);
+  }
+
+  private cancelPending(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}

@@ -105,3 +105,14 @@ test('a throwing listener neither stops the others nor escapes the mutation', ()
   expect(() => s.clear()).not.toThrow();
   expect(fired).toBe(3);
 });
+
+test('totalsOf gives the statement totals of one project, or undefined for an unknown key', () => {
+  const s = new CoverageStore();
+  s.replace('p1', [file('/w/a.ts', [[1, 1], [2, 0]]), file('/w/b.ts', [[1, 1]])]);
+  s.replace('p2', [file('/w/a.ts', [[2, 1]])]);
+  expect(s.totalsOf('p1')).toEqual({ covered: 2, total: 3 });
+  expect(s.totalsOf('p2')).toEqual({ covered: 1, total: 1 });
+  expect(s.totalsOf('nope')).toBeUndefined();
+  s.union('p2', [file('/w/c.ts', [[1, 0]])]);
+  expect(s.totalsOf('p2')).toEqual({ covered: 1, total: 2 });
+});

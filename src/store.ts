@@ -12,6 +12,7 @@ export class CoverageStore {
   private readonly listeners = new Set<() => void>();
   private mergedCache: readonly MergedEntry[] | undefined;
   private totalsCache: Count | undefined;
+  private readonly projectTotalsCache = new Map<string, Count>();
 
   /** Replaces everything a project holds. An empty list keeps the project, with no files. */
   replace(key: string, files: readonly FileCoverageData[]): void {
@@ -74,6 +75,23 @@ export class CoverageStore {
     return { covered, total };
   }
 
+  /** Statement totals of one project's own files (before the union with other projects); cached until the next change. */
+  totalsOf(key: string): Count | undefined {
+    const files = this.projects.get(key);
+    if (!files) return undefined;
+    let totals = this.projectTotalsCache.get(key);
+    if (!totals) {
+      totals = { covered: 0, total: 0 };
+      for (const f of files) {
+        const { statements } = summarize(f);
+        totals.covered += statements.covered;
+        totals.total += statements.total;
+      }
+      this.projectTotalsCache.set(key, totals);
+    }
+    return { ...totals };
+  }
+
   onDidChange(listener: () => void): { dispose(): void } {
     const wrapped = (): void => listener();
     this.listeners.add(wrapped);
@@ -83,6 +101,7 @@ export class CoverageStore {
   private changed(): void {
     this.mergedCache = undefined;
     this.totalsCache = undefined;
+    this.projectTotalsCache.clear();
     for (const listener of [...this.listeners]) {
       try {
         listener();

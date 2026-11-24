@@ -3,7 +3,7 @@
   "displayName": "Coverage Tools",
   "description": "Run tests with coverage and show the results in VS Code's native coverage view.",
   "version": "0.0.1",
-  "publisher": "danilofg",
+  "publisher": "DaniloFG",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -25,14 +25,28 @@
       "description": "In untrusted workspaces Coverage Tools only reads coverage reports; it does not run any command."
     }
   },
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      {
+        "command": "coverageTools.show",
+        "title": "Show Coverage",
+        "category": "Coverage Tools"
+      },
+      {
+        "command": "coverageTools.clear",
+        "title": "Clear Coverage",
+        "category": "Coverage Tools"
+      }
+    ]
+  },
   "scripts": {
     "build": "node esbuild.mjs --production",
+    "vscode:prepublish": "npm run build",
     "lint": "tsc --noEmit && eslint src test scripts",
-    "test": "vitest run --project unit",
+    "test": "npm run build && vitest run --project unit",
     "test:e2e": "vitest run --project e2e",
     "test:perf": "vitest run --project perf",
-    "test:ui": "node test/ui/run.mjs",
+    "test:ui": "node esbuild.mjs && node test/ui/run.mjs",
     "check:size": "node scripts/check-size.mjs",
     "package": "vsce package --no-yarn"
   },

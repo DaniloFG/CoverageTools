@@ -19,15 +19,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Planned
 
-- Accumulated coverage for every project in the workspace, shown through VS
-  Code's native Test Coverage UI (per-file percentage, coverage bars,
-  line-by-line highlighting).
 - Automatic detection of coverage reports written by runs made outside the
   extension (terminal, tasks, scripts).
 - `Run All Coverage` command to run every test project in the workspace.
 - `Run Coverage Here` in the Explorer right-click menu for a test project,
   folder, or test file.
-- `Show Coverage` and `Clear Coverage` commands.
 - .NET (C#) support for VSTest and Microsoft.Testing.Platform test projects,
   using whichever coverage collector the project already has.
 - Node support for Jest and Vitest, with or without a `test` script, and for
@@ -41,14 +37,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Reading of Cobertura, Istanbul JSON, and LCOV reports, whatever tool wrote
   them.
 - Custom coverage command per project (`coverageTools.commands`).
-- Status bar item with the accumulated total.
 - Usage screenshots in the README, captured from the sample workspace.
 
 ### In progress
 
 - Implementation of the first release. The design is approved and the
   implementation plan is written.
+- Accumulated coverage for every project in the workspace, shown through VS
+  Code's native Test Coverage UI (per-file percentage, coverage bars,
+  line-by-line highlighting). Publishing works; loading reports and running
+  tests are not wired in yet.
 
 ### Done
 
-- Nothing yet.
+- `Show Coverage` and `Clear Coverage` commands.
+- Status bar item with the accumulated total.
