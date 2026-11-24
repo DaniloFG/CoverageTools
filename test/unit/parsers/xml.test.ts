@@ -40,11 +40,12 @@ test('a DOCTYPE with an internal subset is skipped', () => {
 });
 
 test('decoding a long run of ampersands stays linear', () => {
-  const s = '&'.repeat(200_000);
+  // Quadratic decoding takes tens of seconds at this size; linear decoding takes milliseconds.
+  const s = '&'.repeat(2_000_000);
   const t = performance.now();
   expect(decodeEntities(s)).toBe(s);
   expect(decodeEntities(`${s};&amp;`)).toBe(`${s};&`);
-  expect(performance.now() - t).toBeLessThan(100);
+  expect(performance.now() - t).toBeLessThan(2_000);
 });
 
 test('a reference too long to be valid stays as written', () => {
