@@ -46,7 +46,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### In progress
 
-- Design specification for the first release.
+- Implementation of the first release. The design is approved and the
+  implementation plan is written.
 
 ### Done
 

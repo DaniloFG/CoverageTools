@@ -2,7 +2,7 @@
 
 **See the test coverage of your whole workspace at once, in VS Code's native coverage UI.**
 
-> **Status: in design — not released yet.**
+> **Status: in development — not released yet.**
 > No version of the extension has shipped. This README describes how the first
 > release is meant to behave and is updated as features land. See
 > [Feature status](#feature-status) for what exists today and
@@ -199,7 +199,8 @@ built to these rules, and each release is checked against them:
 
 | Feature | Status |
 |---------|--------|
-| Design specification | Written, awaiting approval |
+| Design specification | Approved |
+| Implementation plan | Written |
 | Accumulated coverage in the native UI | Planned |
 | Automatic detection of coverage reports | Planned |
 | Run All Coverage | Planned |

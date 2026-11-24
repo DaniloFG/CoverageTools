@@ -1,8 +1,10 @@
 # Coverage Tools — design
 
 Data: 2026-11-24
-Status: aguardando aprovação (revisão 3: três ecossistemas, imagens de uso,
-regras agnósticas de projeto e requisito de leveza)
+Status: aprovado pelo usuário em 2026-11-24 (revisão 3). Revisão 4, feita ao
+escrever o plano: atualiza os fatos sobre o ambiente de desenvolvimento
+(seções 3 e 9) e precisa onde a mesclagem roda (seção 6.1, item 4).
+Plano: `docs/superpowers/plans/2026-11-24-coverage-tools.md`
 
 ## 1. Intenção e porquê
 
@@ -89,10 +91,11 @@ entre projetos.
 - **Dados podem ficar defasados.** Se um arquivo é editado depois da
   execução, as linhas marcadas podem não corresponder mais. O nativo tem o
   mesmo comportamento.
-- **Ambiente de desenvolvimento.** No contêiner onde a extensão está sendo
-  construída há Node e Python, mas não há .NET SDK, e o download do VS Code é
-  bloqueado pela rede. Ver a seção 9 para o impacto na verificação e nas
-  imagens.
+- **Ambiente de desenvolvimento.** O contêiner onde a extensão é construída
+  tem Node e Python; o .NET SDK (8 e 10) instala pelo gerenciador de pacotes
+  do sistema; e o download do VS Code foi liberado em um ambiente próprio
+  deste repositório. As três frentes e a interface podem ser testadas de
+  verdade ali.
 - API mínima: `engines.vscode` `^1.90.0` (a API de cobertura é estável desde
   a 1.88).
 
@@ -494,11 +497,14 @@ Princípios, todos obrigatórios:
    (por exemplo, achar atributos de teste em `.cs`) fica restrita a projetos
    de teste, é guardada em cache por data de modificação e refeita arquivo a
    arquivo ao salvar.
-4. **Leitura de relatórios fora da linha principal.** Parsers e mesclagem
-   rodam em uma thread de trabalho (`worker_threads`), criada sob demanda e
-   encerrada quando ociosa. Um relatório de dezenas de megabytes não pode
-   travar o processo de extensões, que é compartilhado com o IntelliSense e
-   com as outras extensões.
+4. **Leitura de relatórios fora da linha principal.** Os parsers rodam em
+   uma thread de trabalho (`worker_threads`), criada sob demanda e encerrada
+   assim que não há pedido pendente. Um relatório de dezenas de megabytes não
+   pode travar o processo de extensões, que é compartilhado com o IntelliSense
+   e com as outras extensões. A união de registros (por arquivo, sobre
+   arranjos compactos já ordenados) roda na linha principal, porque os dados
+   acumulados vivem ali; ela é barata e fica presa à meta de 50 ms abaixo,
+   verificada por teste.
 5. **Detalhe sob demanda.** Na publicação vão só os totais por arquivo. O
    detalhe linha a linha é entregue quando o VS Code pede, arquivo a arquivo
    (`loadDetailedCoverage`).
@@ -619,27 +625,19 @@ Regras:
   verdade, e os
   relatórios gerados alimentam os testes dos parsers.
 - **Integração no VS Code:** ativação, registro de comandos, publicação de
-  uma cobertura de exemplo sem erros. Roda no GitHub Actions, onde o download
-  do VS Code funciona.
-- **.NET real:** não pode ser executado no contêiner de desenvolvimento (sem
-  .NET SDK). Fica coberto por relatórios de exemplo, por um job de GitHub
-  Actions que roda de verdade projetos de exemplo de cada variação (VSTest
-  com coverlet, VSTest sem coverlet, e Microsoft.Testing.Platform com MSTest,
-  NUnit, xUnit v3 e TUnit), e por verificação manual do usuário.
+  uma cobertura de exemplo sem erros. Roda no ambiente de desenvolvimento e
+  no GitHub Actions.
+- **.NET real:** projetos de exemplo de cada variação (VSTest com
+  `coverlet.collector`, com `coverlet.msbuild` e sem coverlet; e
+  Microsoft.Testing.Platform com MSTest, NUnit, xUnit v3 e TUnit) são
+  executados de verdade no ambiente de desenvolvimento e no GitHub Actions.
 - **Leveza:** testes automatizados para as metas da seção 6.1 — ativação sem
   leitura de arquivo e sem temporizadores, tempo de bloqueio e memória com um
   relatório sintético de 5.000 arquivos, e limite de tamanho do pacote
   verificado no GitHub Actions.
-- **Aparência final e capturas de tela:** exigem um VS Code real rodando.
-  Caminhos possíveis, em ordem de preferência, a decidir no plano:
-  1. liberar na rede do ambiente o download do VS Code, e rodar o script de
-     captura no próprio contêiner;
-  2. rodar a extensão no `code-server` (distribuição do VS Code para
-     navegador, instalável pelo npm) dentro do contêiner e capturar com o
-     navegador já disponível;
-  3. gerar as capturas em um job de GitHub Actions e trazê-las para o
-     repositório;
-  4. o usuário captura manualmente seguindo um roteiro.
+- **Aparência final e capturas de tela:** um VS Code real é baixado e
+  dirigido por automação (Playwright sobre o Electron do VS Code), tanto para
+  os testes de interface quanto para o script que gera as imagens do README.
 
 ## 10. O que fica a cargo de quem implementa
 
