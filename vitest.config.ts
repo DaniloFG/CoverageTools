@@ -6,6 +6,15 @@ export default defineConfig({
       { test: { name: 'unit', include: ['test/unit/**/*.test.ts'] } },
       { test: { name: 'e2e', include: ['test/e2e/**/*.test.ts'], testTimeout: 300_000 } },
       { test: { name: 'perf', include: ['test/perf/**/*.test.ts'] } },
+      {
+        test: {
+          name: 'ui',
+          include: ['test/ui/**/*.ui.test.ts'],
+          fileParallelism: false,
+          testTimeout: 180_000,
+          hookTimeout: 60_000,
+        },
+      },
     ],
   },
 });

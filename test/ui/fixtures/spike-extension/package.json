@@ -1,0 +1,23 @@
+{
+  "name": "spike",
+  "displayName": "Spike",
+  "version": "0.0.0",
+  "publisher": "coverage-tools-test",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "spike.publish",
+        "title": "Publish",
+        "category": "Spike"
+      }
+    ]
+  }
+}

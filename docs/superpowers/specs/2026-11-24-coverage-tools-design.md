@@ -561,6 +561,8 @@ medir corretamente projetos que transpilam em tempo de execução (ts-node,
 tsx, Babel). Deve ser validado com projetos de exemplo reais (Mocha em
 JavaScript, Mocha em TypeScript e `node --test`).
 
+Validado em VS Code 1.147.0 em 2026-11-24: execução sem itens de teste é exibida.
+
 ### Mesclagem no modelo
 
 A união de dois registros do mesmo arquivo casa instruções por intervalo,
