@@ -10,3 +10,5 @@
 !LICENSE
 !docs/images/**
 !package.json
+# Sample projects (and their own node_modules) are never packaged; listed last so it wins.
+samples/**
