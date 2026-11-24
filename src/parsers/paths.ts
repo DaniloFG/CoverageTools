@@ -3,10 +3,17 @@ import type { ParseContext } from './types';
 
 type PathImpl = Pick<typeof nodePath, 'isAbsolute' | 'join' | 'normalize' | 'resolve' | 'sep'>;
 
-/** Prefixes that deterministic .NET builds substitute for a source root (`/_/`, also with backslashes). */
+/**
+ * The part after a deterministic-build prefix, or undefined. Deterministic .NET builds replace each
+ * SourceRoot with `/_/`, `/_1/`, `/_2/`... (also written with backslashes); a bare prefix yields ''.
+ */
 function deterministicRest(p: string): string | undefined {
-  if (p.length > 3 && p[1] === '_' && (p[0] === '/' || p[0] === '\\') && (p[2] === '/' || p[2] === '\\')) return p.slice(3);
-  return undefined;
+  const sep = (i: number) => p[i] === '/' || p[i] === '\\';
+  if (!sep(0) || p[1] !== '_') return undefined;
+  let i = 2;
+  while (i < p.length && p.charCodeAt(i) >= 48 && p.charCodeAt(i) <= 57) i++;
+  if (i === p.length) return '';
+  return sep(i) ? p.slice(i + 1) : undefined;
 }
 
 /** Normalizes separators and, on Windows, upper-cases the drive letter. */

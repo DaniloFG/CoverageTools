@@ -35,6 +35,22 @@ test('a deterministic <source> maps to the workspace roots', () => {
   expect(resolveReportPath('src/a.cs', ['/_/proj/'], c)).toBe('/w/proj/src/a.cs');
 });
 
+test('numbered deterministic prefixes /_1/, /_2/ and bare /_/ sources map to the workspace roots', () => {
+  const c = ctxOf(['/w/src/a.cs', '/w/lib/b.cs'], '/r', ['/w']);
+  expect(resolveReportPath('/_1/src/a.cs', [], c)).toBe('/w/src/a.cs');
+  expect(resolveReportPath('/_12/lib/b.cs', [], c)).toBe('/w/lib/b.cs');
+  expect(resolveReportPath('src/a.cs', ['/_/'], c)).toBe('/w/src/a.cs');
+  expect(resolveReportPath('src/a.cs', ['/_'], c)).toBe('/w/src/a.cs');
+  expect(resolveReportPath('lib/b.cs', ['/_3/'], c)).toBe('/w/lib/b.cs');
+  expect(resolveReportPath('/_x/src/a.cs', [], c)).toBeUndefined();
+});
+
+test('Windows: numbered deterministic prefixes with backslashes', () => {
+  const c = ctxOf(['C:\\w\\lib\\b.cs'], 'C:\\r', ['C:\\w']);
+  expect(resolveReportPath('\\_2\\lib\\b.cs', [], c, path.win32)).toBe('C:\\w\\lib\\b.cs');
+  expect(resolveReportPath('lib\\b.cs', ['/_1/'], c, path.win32)).toBe('C:\\w\\lib\\b.cs');
+});
+
 test('a path that exists nowhere resolves to undefined', () => {
   expect(resolveReportPath('src/missing.cs', ['/w'], ctx)).toBeUndefined();
   expect(resolveReportPath('/elsewhere/missing.cs', [], ctx)).toBeUndefined();

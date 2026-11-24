@@ -28,6 +28,20 @@ test('branches use the branch location and one arm per count', () => {
   expect(Array.from(f.branches)).toEqual([4, 2, 0, 2, 4, 2, 1, 0]);
 });
 
+test('branch entries that start at the same position keep distinct arms', () => {
+  // `a && b ? c : d`: a cond-expr and a binary-expr both start at `a`.
+  const at = { start: { line: 3, column: 4 }, end: { line: 3, column: 18 } };
+  const json = JSON.stringify({
+    '/w/src/a.ts': {
+      path: '/w/src/a.ts', statementMap: {}, fnMap: {}, s: {}, f: {},
+      branchMap: { 0: { loc: at, type: 'cond-expr', locations: [at, at] }, 1: { loc: at, type: 'binary-expr', locations: [at, at] } },
+      b: { 0: [1, 0], 1: [0, 1] },
+    },
+  });
+  const f = parseIstanbul(json, ctx).files[0];
+  expect(Array.from(f.branches)).toEqual([3, 4, 0, 1, 3, 4, 1, 0, 3, 4, 2, 0, 3, 4, 3, 1]);
+});
+
 test('functions become declarations using fnMap loc and name', () => {
   const f = parseIstanbul(read('coverage-final.json'), ctx).files[0];
   expect(f.names).toEqual(['(anonymous_1)', 'add']);

@@ -1,5 +1,5 @@
-import { EOL, FileBuilder } from '../model';
-import { resolveReportPath } from './paths';
+import { EOL, type FileBuilder } from '../model';
+import { FileCollector } from './collect';
 import { NotCoverageReportError, ReportParseError, type ParseContext, type ParsedReport } from './types';
 
 interface Position { line?: unknown; column?: unknown }
@@ -59,6 +59,8 @@ function addFile(b: FileBuilder, data: Record<string, unknown>): void {
 
   const branchMap = isObject(data.branchMap) ? data.branchMap : {};
   const counts = isObject(data.b) ? data.b : {};
+  /** Next arm per `line:col`, so branch entries that start at one position (e.g. `a && b ? c : d`) stay distinct. */
+  const nextArm = new Map<string, number>();
   for (const id in branchMap) {
     const br = branchMap[id];
     if (!isObject(br)) continue;
@@ -72,7 +74,10 @@ function addFile(b: FileBuilder, data: Record<string, unknown>): void {
     const line = lineOf(start);
     if (line === 0) continue;
     const col = startColOf(start);
-    for (let arm = 0; arm < arms.length; arm++) b.addBranch(line, col, arm, countOf(arms[arm]));
+    const key = `${line}:${col}`;
+    const base = nextArm.get(key) ?? 0;
+    nextArm.set(key, base + arms.length);
+    for (let arm = 0; arm < arms.length; arm++) b.addBranch(line, col, base + arm, countOf(arms[arm]));
   }
 }
 
@@ -92,24 +97,12 @@ export function parseIstanbul(json: string, ctx: ParseContext): ParsedReport {
     }
   }
 
-  const builders = new Map<string, FileBuilder>();
-  const unresolved = new Set<string>();
+  const collector = new FileCollector(ctx);
   for (const key in root) {
     const data = root[key] as Record<string, unknown>;
     const raw = typeof data.path === 'string' && data.path !== '' ? data.path : key;
-    const path = resolveReportPath(raw, [], ctx);
-    if (path === undefined) {
-      unresolved.add(raw);
-      continue;
-    }
-    let b = builders.get(path);
-    if (b === undefined) builders.set(path, (b = new FileBuilder(path)));
-    addFile(b, data);
+    const b = collector.builderFor(raw);
+    if (b !== undefined) addFile(b, data);
   }
-
-  return {
-    files: [...builders.keys()].sort().map(p => builders.get(p)!.build()),
-    signature: '',
-    dropped: unresolved.size,
-  };
+  return collector.finish('');
 }

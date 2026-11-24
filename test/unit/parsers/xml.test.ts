@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { ReportParseError } from '../../../src/parsers/types';
-import { scanXml } from '../../../src/parsers/xml';
+import { decodeEntities, scanXml } from '../../../src/parsers/xml';
 
 function events(xml: string): unknown[] {
   const out: unknown[] = [];
@@ -37,6 +37,19 @@ test('handles a BOM, single quotes, self-closing tags, numeric references and wh
 
 test('a DOCTYPE with an internal subset is skipped', () => {
   expect(events('<!DOCTYPE a [ <!ENTITY e "v>"> ]><a/>')).toEqual([['open', 'a', {}], ['close', 'a']]);
+});
+
+test('decoding a long run of ampersands stays linear', () => {
+  const s = '&'.repeat(200_000);
+  const t = performance.now();
+  expect(decodeEntities(s)).toBe(s);
+  expect(decodeEntities(`${s};&amp;`)).toBe(`${s};&`);
+  expect(performance.now() - t).toBeLessThan(100);
+});
+
+test('a reference too long to be valid stays as written', () => {
+  expect(decodeEntities('&averyveryverylongname; &lt;')).toBe('&averyveryverylongname; <');
+  expect(decodeEntities('a & b &#x10FFFF; &#1114112;')).toBe('a & b \u{10FFFF} &#1114112;');
 });
 
 test('throws ReportParseError on truncated input', () => {

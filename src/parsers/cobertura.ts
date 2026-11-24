@@ -1,5 +1,5 @@
-import { FileBuilder } from '../model';
-import { resolveReportPath } from './paths';
+import type { FileBuilder } from '../model';
+import { FileCollector } from './collect';
 import { NotCoverageReportError, type ParseContext, type ParsedReport } from './types';
 import { scanXml } from './xml';
 
@@ -28,9 +28,7 @@ function lineNumber(value: string | undefined): number {
 export function parseCobertura(xml: string, ctx: ParseContext): ParsedReport {
   const sources: string[] = [];
   const packages = new Set<string>();
-  const builders = new Map<string, FileBuilder>();
-  const resolved = new Map<string, string | undefined>();
-  const unresolved = new Set<string>();
+  const collector = new FileCollector(ctx);
   const stack: string[] = [];
 
   let sourceText: string | undefined;
@@ -70,19 +68,7 @@ export function parseCobertura(xml: string, ctx: ParseContext): ParsedReport {
         }
         case 'class': {
           const raw = attrs.filename;
-          builder = undefined;
-          if (raw === undefined || raw === '') return;
-          let path = resolved.get(raw);
-          if (path === undefined && !resolved.has(raw)) {
-            path = resolveReportPath(raw, sources, ctx);
-            resolved.set(raw, path);
-          }
-          if (path === undefined) {
-            unresolved.add(raw);
-            return;
-          }
-          builder = builders.get(path);
-          if (builder === undefined) builders.set(path, (builder = new FileBuilder(path)));
+          builder = raw === undefined || raw === '' ? undefined : collector.builderFor(raw, sources);
           return;
         }
         case 'method':
@@ -123,9 +109,5 @@ export function parseCobertura(xml: string, ctx: ParseContext): ParsedReport {
     },
   });
 
-  return {
-    files: [...builders.keys()].sort().map(p => builders.get(p)!.build()),
-    signature: [...packages].sort().join('|'),
-    dropped: unresolved.size,
-  };
+  return collector.finish([...packages].sort().join('|'));
 }

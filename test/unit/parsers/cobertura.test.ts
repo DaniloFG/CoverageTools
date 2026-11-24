@@ -63,8 +63,15 @@ test('the same file under two <package> elements is merged, and the signature li
 
 test('lines listed under a method are not counted again as statements', () => {
   const r = parseCobertura(read('cobertura-coverlet.xml'), ctx);
-  expect(r.files[0].statements.length / 5).toBe(4);
-  expect(r.files[0].branches.length / 4).toBe(2);
+  // Every line appears under its <method> and under the class <lines>; hits stay as written (2, not 4).
+  expect(Array.from(r.files[0].statements)).toEqual([5, 0, 0, 0, 2, 6, 0, 0, 0, 2, 10, 0, 0, 0, 0, 11, 0, 0, 0, 0]);
+  expect(Array.from(r.files[0].branches)).toEqual([10, 0, 0, 0, 10, 0, 1, 0]);
+  const inline = parseCobertura(doc('<class filename="src/Calc.cs"><methods><method name="M"><lines>'
+    + '<line number="3" hits="5" branch="true" condition-coverage="50% (1/2)"/></lines></method></methods>'
+    + '<lines><line number="3" hits="5" branch="true" condition-coverage="50% (1/2)"/></lines></class>'), ctx);
+  expect(Array.from(inline.files[0].statements)).toEqual([3, 0, 0, 0, 5]);
+  expect(Array.from(inline.files[0].branches)).toEqual([3, 0, 0, 1, 3, 0, 1, 0]);
+  expect(decls(inline.files[0])).toEqual([['M', 3, 5]]);
 });
 
 test('coverage.py dialect: filename relative to <source>, no methods', () => {

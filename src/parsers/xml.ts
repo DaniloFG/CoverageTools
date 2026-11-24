@@ -17,9 +17,11 @@ export function decodeEntities(s: string): string {
   let out = '';
   let from = 0;
   while (amp >= 0) {
-    const semi = s.indexOf(';', amp + 1);
-    if (semi < 0) break;
-    const ref = semi - amp <= MAX_REFERENCE ? s.slice(amp + 1, semi) : '';
+    // Look for the ';' only within the longest possible reference, so runs of '&' stay linear.
+    const limit = Math.min(s.length, amp + 2 + MAX_REFERENCE);
+    let semi = amp + 1;
+    while (semi < limit && s.charCodeAt(semi) !== 59 /* ; */) semi++;
+    const ref = semi < limit ? s.slice(amp + 1, semi) : '';
     let decoded: string | undefined;
     if (ref.charCodeAt(0) === 35 /* # */) {
       const code = ref[1] === 'x' || ref[1] === 'X' ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10);

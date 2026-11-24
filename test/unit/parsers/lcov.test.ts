@@ -61,6 +61,23 @@ test('several blocks on one line get distinct arms', () => {
   expect(Array.from(f.branches)).toEqual([4, 0, 0, 1, 4, 0, 1, 0, 4, 0, 2, 2, 4, 0, 3, 0]);
 });
 
+test('lcov 2.2 FNL and FNA records are read by index, with commas in names and summed aliases', () => {
+  const text = 'SF:src/a.js\nFNL:0,3,8\nFNA:0,4,add\nFNL:1,10\nFNA:1,0,map(a,b)\nFNA:0,1,add_alias\nend_of_record\n';
+  const f = parseLcov(text, ctx).files[0];
+  expect(f.names).toEqual(['add', 'map(a,b)']);
+  expect(Array.from(f.declarations)).toEqual([3, 0, 8, EOL, 5, 0, 10, 0, 0, 0, 0, 1]);
+});
+
+test('BRDA reads taken from the last field, so branch expressions may contain commas', () => {
+  const f = parseLcov('SF:src/a.js\nBRDA:7,e0,(a,b) == 1,4\nBRDA:7,e0,(a,b) != 1,-\nend_of_record\n', ctx).files[0];
+  expect(Array.from(f.branches)).toEqual([7, 0, 0, 4, 7, 0, 1, 0]);
+});
+
+test('a repeated FN name gets its FNDA hits once, on the first declaration', () => {
+  const f = parseLcov('SF:src/a.js\nFN:1,f\nFN:5,f\nFNDA:3,f\nend_of_record\n', ctx).files[0];
+  expect(decls(f)).toEqual([['f', 1, 3]]);
+});
+
 test('CRLF line endings are accepted', () => {
   const f = parseLcov(SAMPLE.replace(/\n/g, '\r\n'), ctx).files[0];
   expect(f.path).toBe('/w/src/a.js');
