@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- `engines.vscode`: `^1.90.0`. Extensão: `name` `coverage-tools`, `displayName` `Coverage Tools`, `publisher` `danilofg`.
+- `engines.vscode`: `^1.90.0`. Extensão: `name` `coverage-tools`, `displayName` `Coverage Tools`, `publisher` `DaniloFG` (o mesmo do GitTools, para as duas extensões ficarem no mesmo publisher do VS Code Marketplace). ID da extensão: `DaniloFG.coverage-tools`.
 - `activationEvents`: somente `onStartupFinished`. A função `activate` não lê arquivos nem cria temporizadores.
 - Tudo o que é voltado ao usuário é **somente em inglês**: títulos de comandos, mensagens, descrições de configuração, `README.md`, `CHANGELOG.md`.
 - Sem telemetria e sem acesso à rede. Nenhuma dependência de execução além do `c8`. Parser de XML próprio, sem biblioteca.
@@ -226,7 +226,7 @@ Ao fim desta fase a extensão já detecta relatórios gravados por qualquer exec
 import manifest from '../../package.json';
 test('manifest follows the global constraints', () => {
   expect(manifest.name).toBe('coverage-tools');
-  expect(manifest.publisher).toBe('danilofg');
+  expect(manifest.publisher).toBe('DaniloFG');
   expect(manifest.engines.vscode).toBe('^1.90.0');
   expect(manifest.activationEvents).toEqual(['onStartupFinished']);
   expect(manifest.main).toBe('./dist/extension.js');
@@ -1111,7 +1111,7 @@ test('the .vsix contains dist, the bundled c8 and no source or test files', asyn
 
 ### Task 23: Publicação automática do `.vsix` (mesmo esquema do GitTools)
 
-Pedido do usuário depois da aprovação do plano: ao publicar, gerar e entregar o `.vsix` automaticamente, como o workflow `publish-extension.yml` do repositório `DaniloFG/GitTools`. Uma cópia de leitura daquele repositório está em `/home/user/danilofg/gittools` (workflow em `.github/workflows/publish-extension.yml`, script em `scripts/extension-version.mjs`); use-a como referência de estrutura, sem copiar os portões de texto específicos daquele projeto.
+Pedido do usuário depois da aprovação do plano: ao publicar, gerar e entregar o `.vsix` automaticamente, como o workflow `publish-extension.yml` do repositório `DaniloFG/GitTools`, e **no mesmo lugar** que o GitTools: o VS Code Marketplace sob o publisher `DaniloFG` (segredo `VSCE_PAT`), opcionalmente o Open VSX (`OVSX_PAT`), e o release `v<versão>` no GitHub com o `.vsix` anexado. Uma cópia de leitura daquele repositório está em `/home/user/danilofg/gittools` (workflow em `.github/workflows/publish-extension.yml`, script em `scripts/extension-version.mjs`); use-a como referência de estrutura, sem copiar os portões de texto específicos daquele projeto.
 
 **Files:**
 - Create: `.github/workflows/publish-extension.yml`, `scripts/extension-version.mjs`, `scripts/release-notes.mjs`
@@ -1149,4 +1149,5 @@ test('the release step has no condition: the .vsix is always attached to a GitHu
 - [ ] **Step 2: Rodar e ver falhar.**
 - [ ] **Step 3: Implementar.** O workflow segue a ordem do GitTools: `checkout` com `fetch-depth: 0`; Node 22 com cache npm; `npm ci`; `lint`, `build`, `check:size`, `npm test`; definir a versão (entrada manual, ou a da tag, ou `scripts/extension-version.mjs`), validar `x.y.z` e gravá-la no `package.json`; gerar as notas com `scripts/release-notes.mjs` (modo `neutral` só em push na branch); `npm run package`; publicar no Marketplace se existir o segredo `VSCE_PAT` (versão já publicada vira aviso, não erro); publicar no Open VSX se existir `OVSX_PAT`; anexar `release/*.vsix` a um release `v<versão>` com `softprops/action-gh-release@v2` e `body_path` das notas; guardar o `.vsix` como artifact `coverage-tools-vsix`. `concurrency: publish-extension`, sem cancelamento. Filtro de caminhos no push: `src/**`, `scripts/**`, `package.json`, `package-lock.json`, `esbuild.mjs`, `tsconfig.json`, `.vscodeignore`, `README.md`, `CHANGELOG.md`, `docs/images/**`. **Diferença deliberada em relação ao GitTools:** lá o release só é criado em tag ou quando o Marketplace publicou; aqui o release com o `.vsix` é criado sempre, porque o pedido é entregar a extensão a cada publicação mesmo sem Marketplace configurado.
 - [ ] **Step 4: Rodar e ver passar; simular o passo de versão** — executar localmente o trecho de shell do passo "definir a versão" com `INPUT_VERSION` vazio, com `0.3.0` e com `abc` (este deve falhar), e `npm run package` deve produzir `release/coverage-tools-<versão>.vsix`.
-- [ ] **Step 5: Commit** — `ci: publish the .vsix automatically on release`. Acrescentar ao `CHANGELOG.md` a linha sobre releases automáticos.
+- [ ] **Step 5: Documentar a publicação.** Criar `CONTRIBUTING.md` (em inglês) com a seção "Publishing", espelhando a do README do GitTools: como gerar o `.vsix` localmente; quando o workflow roda (merge na `main` que mexa no que vai para a extensão, tag `v*`, manual); como a versão é escolhida; a configuração única dos segredos `VSCE_PAT` (token do Marketplace, escopo *Marketplace → Manage*, do publisher `DaniloFG`) e `OVSX_PAT` (opcional); e que sem o segredo o workflow só anexa o `.vsix` ao release. No `README.md`, "Installation" passa a ter duas formas: pelo Marketplace (`ext install DaniloFG.coverage-tools`) e pelo `.vsix` da página de Releases. O manifesto ganha o que o Marketplace pede: `icon` (PNG 128×128 simples em `media/icon.png`), `galleryBanner`, `keywords`, `homepage` e `bugs`.
+- [ ] **Step 6: Commit** — `ci: publish the .vsix automatically on release`. Acrescentar ao `CHANGELOG.md` a linha sobre releases automáticos.

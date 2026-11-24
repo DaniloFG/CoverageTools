@@ -54,6 +54,10 @@ entre projetos.
    com **imagens** como usá-la corretamente e reflita sempre o estado real do
    que está implementado; e um `CHANGELOG.md` em inglês que registre o que
    está planejado, em andamento e entregue.
+10. **Publicar automaticamente**, pelo mesmo esquema do repositório GitTools e
+    no mesmo lugar: VS Code Marketplace sob o publisher `DaniloFG`,
+    opcionalmente Open VSX, e um release no GitHub com o `.vsix` anexado a
+    cada publicação (pedido do usuário depois da aprovação do design).
 
 ### Não-objetivos (primeira versão)
 
@@ -63,7 +67,6 @@ entre projetos.
 - Substituir o Test Explorer do C# Dev Kit, da extensão do Jest ou da
   extensão de Python.
 - Histórico, tendências ou metas mínimas de cobertura.
-- Publicação no Marketplace. A entrega é o código e um `.vsix` instalável.
 
 ### Anti-objetivos
 
@@ -577,7 +580,7 @@ Decisões de quem escreveu o design, salvo onde indicado:
 - GitHub Actions: lint, testes unitários, testes de integração e geração do
   `.vsix` em cada push e pull request.
 - Identificação: nome `coverage-tools`, nome de exibição "Coverage Tools",
-  publisher `danilofg`.
+  publisher `DaniloFG` (o mesmo do GitTools).
 - Tudo o que é voltado ao usuário fica **somente em inglês**: textos da
   interface, `README.md` e `CHANGELOG.md` (decisão do usuário).
 - `CHANGELOG.md` segue o formato Keep a Changelog, com a seção
