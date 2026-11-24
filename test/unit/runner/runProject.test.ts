@@ -348,3 +348,13 @@ test('every cancelled outcome is a fresh object', async () => {
   expect(a).toEqual({ status: 'cancelled' });
   expect(a).not.toBe(b);
 });
+
+test('a report new to the run is ingested even when its mtime is older than the run start', async () => {
+  const scanned = path.join(root, 'scanned');
+  mkdirSync(path.join(scanned, 'coverage'), { recursive: true });
+  const report = path.join(scanned, 'coverage', 'lcov.info');
+  const script = 'const fs = require("fs"); fs.writeFileSync(process.argv[1], process.argv[2]); const t = new Date(Date.now() - 3600000); fs.utimesSync(process.argv[1], t, t)';
+  planFor = () => ({ steps: [{ command: NODE, args: ['-e', script, report, lcov(6)], cwd: root }], reportSearchDir: scanned, hint: '' });
+  expect((await runProject(project, full, deps(), live())).status).toBe('ok');
+  expect(linesOf(srcA)).toEqual([[1, 6], [2, 0]]);
+});

@@ -33,10 +33,13 @@ function needsCmd(command: string): boolean {
 /**
  * The command line given to `cmd.exe /d /s /c` for a .cmd/.bat command (without the outer quotes).
  * The command is normalized to backslashes first: cmd.exe reads `node_modules/.bin/jest.cmd` as
- * `node_modules` followed by a `/.bin/...` switch.
+ * `node_modules` followed by a `/.bin/...` switch. An explicit `./` or `.\` prefix is kept.
  */
 export function cmdCommandLine(command: string, args: readonly string[]): string {
-  const normalized = path.win32.normalize(command);
+  let normalized = path.win32.normalize(command);
+  // normalize drops a leading `./`; keep it, since cmd.exe may not look in the current directory
+  // (NoDefaultCurrentDirectoryInExePath).
+  if (/^\.[\\/]/.test(command) && !/^\.{1,2}\\/.test(normalized)) normalized = `.\\${normalized}`;
   const doubleEscape = /node_modules\\\.bin\\[^\\]+\.cmd$/i.test(normalized);
   return [normalized.replace(CMD_META, '^$1'), ...args.map(a => quoteForCmd(a, doubleEscape))].join(' ');
 }

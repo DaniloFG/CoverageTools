@@ -160,6 +160,11 @@ test('cmdCommandLine normalizes the command to backslashes and quotes the argume
   expect(cmdCommandLine('node_modules/.bin/jest.cmd', ['--coverage', 'a b'])).toBe('node_modules\\.bin\\jest.cmd ^^^"--coverage^^^" ^^^"a^^^ b^^^"');
   expect(cmdCommandLine('C:/Program Files/nodejs/npm.cmd', ['test'])).toBe('C:\\Program^ Files\\nodejs\\npm.cmd ^"test^"');
   expect(cmdCommandLine('yarn', ['jest', 'x&y'])).toBe('yarn ^"jest^" ^"x^&y^"');
+  expect(cmdCommandLine('./jest.cmd', [])).toBe('.\\jest.cmd');
+  expect(cmdCommandLine('.\\tools/run.bat', ['x'])).toBe('.\\tools\\run.bat ^"x^"');
+  expect(cmdCommandLine('./node_modules/.bin/jest.cmd', [])).toBe('.\\node_modules\\.bin\\jest.cmd');
+  expect(cmdCommandLine('../up.cmd', [])).toBe('..\\up.cmd');
+  expect(cmdCommandLine('./.tools.cmd', [])).toBe('.\\.tools.cmd');
 });
 
 test('a grandchild that keeps the output pipe open does not keep exec waiting after its parent exits', async () => {

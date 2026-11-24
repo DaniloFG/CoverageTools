@@ -1,9 +1,9 @@
-import { mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Adapter, AdapterId, CommandSpec, FsReader, PlanContext, Project, RunTarget } from '../adapters/types';
 import { formatOf } from '../parsers/load';
-import { FORMAT_PRIORITY } from '../parsers/types';
+import { FORMAT_PRIORITY, type ReportFormat } from '../parsers/types';
 import type { Settings } from '../settings';
 import type { CoverageStore } from '../store';
 import type { ParserClient } from '../worker/client';
@@ -48,10 +48,8 @@ export async function runProject(project: Project, target: RunTarget, deps: RunD
   let tmpDir: string | undefined;
   let suppression: { release(): void } | undefined;
   try {
-    let startMtime: number;
     try {
       tmpDir = await mkdtemp(path.join(await realpath(os.tmpdir()), 'coverage-tools-'));
-      startMtime = await startMarker(tmpDir);
       suppression = deps.suppress(project.key);
     } catch (e) {
       return { status: 'spawn-error', message: `Could not prepare the run: ${messageOf(e)}` };
@@ -71,6 +69,12 @@ export async function runProject(project: Project, target: RunTarget, deps: RunD
     if (signal.aborted) return cancelled();
     if (plan.steps.length === 0) return { status: 'no-report', hint: plan.hint };
 
+    // When the adapter scans the project itself, reports already there are left over from earlier runs:
+    // only files that are new or changed since this snapshot count.
+    const insideTmp = isInside(plan.reportSearchDir, tmpDir);
+    const before = insideTmp ? undefined : await scanReports(plan.reportSearchDir);
+    if (signal.aborted) return cancelled();
+
     let failedCode: number | null | undefined;
     for (const step of plan.steps) {
       deps.output(`> ${describe(step)}\n`);
@@ -85,8 +89,7 @@ export async function runProject(project: Project, target: RunTarget, deps: RunD
       if (code !== 0 && failedCode === undefined) failedCode = code;
     }
 
-    const insideTmp = isInside(plan.reportSearchDir, tmpDir);
-    const candidates = await findReports(plan.reportSearchDir, insideTmp ? undefined : startMtime);
+    const candidates = await findReports(plan.reportSearchDir, before);
     if (signal.aborted) return cancelled();
     if (candidates.length === 0) return { status: 'no-report', hint: plan.hint };
 
@@ -122,17 +125,6 @@ export async function runProject(project: Project, target: RunTarget, deps: RunD
   }
 }
 
-/**
- * Writes a marker file and returns its modification time, as the file system clock sees it. Reports
- * modified strictly after it were written by this run; comparing with `Date.now()` instead would be
- * off by the kernel's coarse clock or a file system's whole-second resolution.
- */
-async function startMarker(tmpDir: string): Promise<number> {
-  const marker = path.join(tmpDir, '.run-started');
-  await writeFile(marker, '');
-  return (await stat(marker)).mtimeMs;
-}
-
 async function probe(spec: CommandSpec, signal: AbortSignal): Promise<{ code: number | null; stdout: string }> {
   let stdout = '';
   const { code } = await exec(spec, { onOutput: chunk => { stdout += chunk; }, signal });
@@ -153,16 +145,14 @@ function isInside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-interface Candidate { path: string; rank: number; mtimeMs: number }
+interface Found { format: ReportFormat; mtimeMs: number; size: number; ino: number }
 
 /**
- * The reports found in `dir` (recursively, boundedly), best first: by FORMAT_PRIORITY (coverage.py data
- * excluded, it must be converted first), then most recently modified. Only known report names count.
- * With `after`, the adapter scans the project itself, so only files modified after that time count.
+ * The known report files in `dir`, searched recursively and boundedly (dependency, build and temp
+ * folders skipped; coverage.py data excluded, it must be converted first).
  */
-async function findReports(dir: string, after: number | undefined): Promise<string[]> {
-  const candidates: Candidate[] = [];
-
+async function scanReports(dir: string): Promise<Map<string, Found>> {
+  const found = new Map<string, Found>();
   const walk = async (current: string, depth: number): Promise<void> => {
     let entries;
     try {
@@ -180,11 +170,26 @@ async function findReports(dir: string, after: number | undefined): Promise<stri
       const format = formatOf(entry.name);
       if (format === undefined || format === 'coveragepy') continue;
       const info = await stat(full).catch(() => undefined);
-      if (info === undefined || (after !== undefined && !(info.mtimeMs > after))) continue;
-      candidates.push({ path: full, rank: FORMAT_PRIORITY.indexOf(format), mtimeMs: info.mtimeMs });
+      if (info !== undefined) found.set(full, { format, mtimeMs: info.mtimeMs, size: info.size, ino: info.ino });
     }
   };
   await walk(dir, 0);
+  return found;
+}
 
-  return candidates.sort((a, b) => a.rank - b.rank || b.mtimeMs - a.mtimeMs).map(c => c.path);
+/**
+ * The reports in `dir`, best first: by FORMAT_PRIORITY, then most recently modified. With `before`
+ * (a snapshot taken before the steps ran), only files that are new or whose mtime, size or inode
+ * changed count. Comparing a file with its own earlier state, rather than with a clock, holds on
+ * file systems with coarse timestamps or a clock of their own (network shares).
+ */
+async function findReports(dir: string, before: ReadonlyMap<string, Found> | undefined): Promise<string[]> {
+  const candidates: Array<Found & { path: string }> = [];
+  for (const [p, f] of await scanReports(dir)) {
+    const old = before?.get(p);
+    if (old !== undefined && old.mtimeMs === f.mtimeMs && old.size === f.size && old.ino === f.ino) continue;
+    candidates.push({ path: p, ...f });
+  }
+  const rank = (f: Found) => FORMAT_PRIORITY.indexOf(f.format);
+  return candidates.sort((a, b) => rank(a) - rank(b) || b.mtimeMs - a.mtimeMs).map(c => c.path);
 }
