@@ -35,6 +35,9 @@ inteiro sem sair da interface nativa.
    projeto, pasta ou arquivo de teste. O item de menu só aparece onde há
    testes de fato.
 6. Suportar `dotnet test` (relatório Cobertura) e Jest (via `yarn`/`npm`/`pnpm`).
+7. Manter um `README.md` em inglês que explique o que a ferramenta faz e
+   reflita sempre o estado real do que está implementado, e um `CHANGELOG.md`
+   em inglês que registre o que está planejado, em andamento e entregue.
 
 ### Não-objetivos (primeira versão)
 
@@ -122,12 +125,32 @@ Um **projeto** é a unidade de armazenamento e de execução:
 
 - **.NET:** um `.csproj` de testes — que referencia `Microsoft.NET.Test.Sdk`
   ou declara `<IsTestProject>true</IsTestProject>`.
-- **Jest:** um diretório com `package.json` que usa Jest — tem a chave
-  `jest`, um arquivo `jest.config.*`, ou `jest` nas dependências.
+- **Jest:** um diretório com `package.json` que tem configuração própria de
+  Jest: a chave `jest` no `package.json`, um arquivo `jest.config.*`, ou um
+  script `test` que chama `jest` ou `react-scripts test`. Ter `jest` apenas
+  nas dependências não basta.
 
 A extensão descobre os projetos em todas as pastas do workspace na ativação
 e redescobre quando `.csproj`, `package.json`, `jest.config.*` ou as pastas
 do workspace mudam. Ignora `node_modules`, `bin` e `obj`.
+
+**Projetos Jest aninhados (monorepo).** Quando um diretório que se qualifica
+contém outros diretórios que também se qualificam, só os de dentro são
+projetos. O de fora é tratado como orquestrador e não é executado, para não
+rodar os mesmos testes duas vezes nem repassar argumentos do Jest a um
+script que só distribui a execução. *(Decisão de quem escreveu o design, a
+confirmar com o usuário.)*
+
+**.NET sobre Microsoft.Testing.Platform.** A primeira versão executa apenas
+projetos baseados em VSTest. Projetos que usam o Microsoft.Testing.Platform
+(`MSTest.Sdk`, `<TestingPlatformDotnetTestSupport>`,
+`<EnableMSTestRunner>`, `<UseMicrosoftTestingPlatformRunner>`, ou
+`global.json` selecionando esse executor) são reconhecidos e marcados como
+não suportados: ficam fora do "Run All" e do botão direito, com um aviso
+único e uma linha no canal de saída explicando o motivo. Relatórios
+Cobertura gerados por eles fora da extensão continuam sendo detectados e
+incorporados normalmente. *(Decisão de quem escreveu o design, a confirmar
+com o usuário.)*
 
 ### 5.3 Formas de alimentar o acumulado
 
@@ -153,10 +176,23 @@ no workspace e, quando um aparece ou muda, lê e incorpora:
 - `**/coverage/cobertura-coverage.xml`
 
 O relatório é atribuído ao projeto descoberto mais próximo acima dele na
-árvore de diretórios. Sem projeto correspondente, o diretório do relatório
-vira a chave. Mudanças são agrupadas por uma pequena janela de espera
-(debounce); se vários formatos aparecem juntos para o mesmo projeto, usa-se
-um só, nesta ordem de preferência: Istanbul JSON, Cobertura, LCOV.
+árvore de diretórios. Mudanças são agrupadas por uma pequena janela de
+espera (debounce); se vários formatos aparecem juntos para o mesmo projeto,
+usa-se um só, nesta ordem de preferência: Istanbul JSON, Cobertura, LCOV.
+
+**Relatório sem projeto dono.** Acontece, por exemplo, com
+`dotnet test --results-directory ./TestResults` na raiz de uma solução: os
+relatórios de todos os projetos caem em `TestResults/<GUID novo>/`, sem
+`.csproj` acima, e o relatório não diz qual projeto de testes o gerou. Nesse
+caso a chave é a **raiz de resultados** (o diretório acima da pasta de GUID
+no padrão `TestResults`, ou o diretório do relatório nos demais casos) mais
+uma **assinatura do conteúdo** (a lista ordenada dos assemblies/pacotes do
+relatório). Um relatório novo substitui o anterior de mesma chave, de modo
+que reexecutar atualiza em vez de acumular lixo, e os relatórios de projetos
+diferentes de uma mesma execução não se sobrescrevem. Limitação aceita: dois
+projetos de teste que instrumentam exatamente o mesmo conjunto de assemblies
+e gravam na mesma raiz compartilhada são confundidos, e o último substitui o
+anterior. *(Decisão de quem escreveu o design.)*
 
 Relatórios que já existem no disco quando a extensão inicia **não** são
 carregados (a extensão começa vazia).
@@ -293,8 +329,12 @@ mantido dos dois lados.
 - Lint com ESLint; empacotamento com `@vscode/vsce`.
 - GitHub Actions: lint, testes unitários, testes de integração e geração do
   `.vsix` em cada push e pull request.
-- Textos da interface em inglês, com tradução para pt-BR (títulos de
-  comandos, descrições de configurações e mensagens).
+- Tudo o que é voltado ao usuário fica **somente em inglês**: textos da
+  interface, `README.md` e `CHANGELOG.md` (decisão do usuário).
+- `CHANGELOG.md` segue o formato Keep a Changelog, com a seção
+  `[Unreleased]` dividida em "Planned", "In progress" e "Done". O `README.md`
+  tem uma tabela de estado por funcionalidade. Os dois são atualizados no
+  mesmo commit de cada mudança visível ao usuário.
 - Identificação: nome `coverage-tools`, nome de exibição "Coverage Tools",
   publisher `danilofg`.
 
