@@ -1,0 +1,163 @@
+name: Publish VS Code extension
+
+# Publishes the extension to the VS Code Marketplace (and, when its token exists, to Open VSX) after building,
+# testing and packaging it. When it runs:
+#  - on every merge to main that touches what goes into the extension. The version is the one in package.json
+#    when it is above the last v* tag; otherwise the last tag with its last number + 1 (see
+#    scripts/extension-version.mjs). For a minor or major, bump package.json by hand. If the version is already
+#    published, the workflow ends without error;
+#  - when a tag such as "v0.5.1" is pushed (the published version is the tag's);
+#  - manually, from Actions → Run workflow.
+on:
+  push:
+    branches: [main]
+    # Only what ends up in the .vsix (or on its Marketplace page): the extension code, the build files, the
+    # README, the CHANGELOG, the images and the icon. Not the tests or the samples. Tags ignore this filter.
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'esbuild.mjs'
+      - 'tsconfig.json'
+      - '.vscodeignore'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'docs/images/**'
+      - 'media/**'
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 0.5.1). Blank for the automatic one: the package.json version if it is above the last v* tag, otherwise the last tag + 1 in the last number.'
+        required: false
+
+# Minimal at the top; writing (attaching the .vsix to the release) is only for the publish job.
+permissions:
+  contents: read
+
+# One publication at a time (two merges in a row do not race for the same version).
+concurrency:
+  group: publish-extension
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the .vsix to the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # brings the tags: the automatic version comes from them
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run check:size
+      - run: npm test
+
+      # Event inputs (the typed version, the ref type and name) reach the shell only through env: inside run:
+      # they would be interpolated into the script and allow command injection.
+      - name: Define the extension version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [ -z "$VERSION" ] && [ "$REF_TYPE" = "tag" ]; then VERSION="${REF_NAME#v}"; fi
+          if [ -z "$VERSION" ]; then VERSION=$(node scripts/extension-version.mjs); fi
+          # Validated in Node: the JS regex does not accept a line break in the middle (grep checks line by line).
+          if ! node -e "process.exit(/^\d+\.\d+\.\d+$/.test(process.argv[1]) ? 0 : 1)" "$VERSION"; then
+            echo "::error::Invalid version (expected x.y.z, e.g. 0.5.1)."
+            exit 1
+          fi
+          node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')" "$VERSION"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # The release body comes from the CHANGELOG (never from PR or commit titles) and is written BEFORE packaging
+      # and publishing: a failure here stops everything after it (Marketplace, Open VSX and the release).
+      # Only a branch push (the automatic patch) accepts the neutral note when there is nothing to say; a tag or a
+      # manual run without text fails. The decision reaches the shell through env (ALLOW_NEUTRAL), never inside run.
+      - name: Release notes (from the CHANGELOG)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ALLOW_NEUTRAL: ${{ github.event_name == 'push' && github.ref_type == 'branch' && 'true' || 'false' }}
+        run: |
+          if [ "$ALLOW_NEUTRAL" = "true" ]; then MODE=neutral; else MODE=strict; fi
+          node scripts/release-notes.mjs "$VERSION" "$RUNNER_TEMP/release-notes.md" "$MODE"
+
+      - run: npm run package
+        env:
+          NODE_ENV: production
+
+      - name: Publish to the VS Code Marketplace
+        id: marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::warning::Secret VSCE_PAT is not configured: the extension was NOT published to the Marketplace (the .vsix is in the artifacts and on the release)."
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          set +e
+          OUT=$(npx vsce publish --no-yarn --packagePath release/coverage-tools-"$VERSION".vsix 2>&1)
+          CODE=$?
+          set -e
+          echo "$OUT"
+          if [ "$CODE" -eq 0 ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          elif echo "$OUT" | grep -qi "already exists"; then
+            echo "::notice::Version $VERSION is already published: nothing to do. The automatic version skips published ones; check the v* tags (the checkout needs fetch-depth: 0)."
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$CODE"
+          fi
+
+      - name: Publish to Open VSX (VSCodium, Cursor…)
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "Secret OVSX_PAT is not configured: Open VSX skipped."
+            exit 0
+          fi
+          set +e
+          OUT=$(npx ovsx publish release/coverage-tools-"$VERSION".vsix -p "$OVSX_PAT" 2>&1)
+          CODE=$?
+          set -e
+          echo "$OUT"
+          if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -qi "already published\|already exists"; then
+            echo "::notice::The version is already on Open VSX: nothing to do."
+          elif [ "$CODE" -ne 0 ]; then
+            exit "$CODE"
+          fi
+
+      # On a tag, attaches to that tag's release; on a new publication from main, or when VSCE_PAT is not
+      # configured (then the release is the only place the .vsix ships), creates the v<version> release.
+      # Skipped only when the version was already on the Marketplace: no new version came out.
+      - name: Attach the .vsix to the release
+        if: github.ref_type == 'tag' || steps.marketplace.outputs.published == 'true' || steps.marketplace.outputs.configured == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          files: release/*.vsix
+          # The body is the CHANGELOG section written above; never generated from PR or commit titles.
+          generate_release_notes: false
+          body_path: ${{ runner.temp }}/release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-tools-vsix
+          path: release/*.vsix
