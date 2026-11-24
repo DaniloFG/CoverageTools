@@ -1,7 +1,7 @@
 # Coverage Tools — design
 
 Data: 2026-11-24
-Status: aguardando aprovação
+Status: aguardando aprovação (revisão 2: três ecossistemas e imagens de uso)
 
 ## 1. Intenção e porquê
 
@@ -15,9 +15,10 @@ execução por vez**. Em um workspace com vários projetos ou várias pastas
 tudo junto pela API nativa de testes e, quando um projeto é reexecutado,
 atualiza só a parte dele.
 
-Público: quem desenvolve em workspaces com vários projetos .NET e/ou
-JavaScript/TypeScript com Jest e quer a visão de cobertura do workspace
-inteiro sem sair da interface nativa.
+Público: quem desenvolve em workspaces com vários projetos — .NET, Node e
+Python, inclusive misturados — e quer a visão de cobertura do workspace
+inteiro sem sair da interface nativa e sem ficar reexecutando e alternando
+entre projetos.
 
 ## 2. Objetivos, não-objetivos e anti-objetivos
 
@@ -34,17 +35,23 @@ inteiro sem sair da interface nativa.
 5. Oferecer, no botão direito do Explorer, a execução da cobertura de um
    projeto, pasta ou arquivo de teste. O item de menu só aparece onde há
    testes de fato.
-6. Suportar `dotnet test` (relatório Cobertura) e Jest (via `yarn`/`npm`/`pnpm`).
-7. Manter um `README.md` em inglês que explique o que a ferramenta faz e
-   reflita sempre o estado real do que está implementado, e um `CHANGELOG.md`
-   em inglês que registre o que está planejado, em andamento e entregue.
+6. Suportar três ecossistemas na primeira versão:
+   - **.NET com C#** (`dotnet test`);
+   - **Node** com Jest, Vitest ou qualquer outra ferramenta de teste que rode
+     pelo script `test` do `package.json`;
+   - **Python** com pytest.
+7. Manter um `README.md` em inglês que explique o que a ferramenta faz, mostre
+   com **imagens** como usá-la corretamente e reflita sempre o estado real do
+   que está implementado; e um `CHANGELOG.md` em inglês que registre o que
+   está planejado, em andamento e entregue.
 
 ### Não-objetivos (primeira versão)
 
 - Guardar cobertura entre reinícios do VS Code. A extensão começa vazia.
-- Outros frameworks (Vitest, Mocha, pytest etc.).
+- Outros ecossistemas (Java, Go, Rust etc.).
 - Cobertura por teste individual ("qual teste cobriu esta linha").
-- Substituir o Test Explorer do C# Dev Kit ou da extensão do Jest.
+- Substituir o Test Explorer do C# Dev Kit, da extensão do Jest ou da
+  extensão de Python.
 - Histórico, tendências ou metas mínimas de cobertura.
 - Publicação no Marketplace. A entrega é o código e um `.vsix` instalável.
 
@@ -55,6 +62,7 @@ inteiro sem sair da interface nativa.
 - Perder a cobertura acumulada de outros projetos quando um projeto roda.
 - Exigir que o usuário altere a configuração dos projetos dele para a
   extensão funcionar.
+- Imagens no README que não sejam capturas reais da extensão funcionando.
 
 ## 3. Restrições
 
@@ -62,17 +70,19 @@ inteiro sem sair da interface nativa.
   extensão contorna isso guardando o acumulado e republicando o conjunto
   inteiro como uma nova execução (`TestRun`) a cada mudança.
 - **Execuções de outras extensões tomam a tela.** Se o usuário rodar
-  cobertura pelo C# Dev Kit ou pela extensão do Jest, o VS Code passa a
-  exibir a execução delas. A extensão não tem como impedir nem detectar isso.
-  O acumulado permanece em memória e o comando "Show Coverage" o republica.
-- **Só existe cobertura se o teste gravar relatório.** `dotnet test` sem
-  coletor e `yarn test` sem `--coverage` não geram nada e são ignorados.
+  cobertura pelo C# Dev Kit, pela extensão do Jest ou pela de Python, o VS
+  Code passa a exibir a execução delas. A extensão não tem como impedir nem
+  detectar isso. O acumulado permanece em memória e o comando "Show Coverage"
+  o republica.
+- **Só existe cobertura se o teste gravar um relatório legível.** Execuções
+  sem opção de cobertura não geram nada e são ignoradas.
 - **Dados podem ficar defasados.** Se um arquivo é editado depois da
   execução, as linhas marcadas podem não corresponder mais. O nativo tem o
   mesmo comportamento.
 - **Ambiente de desenvolvimento.** No contêiner onde a extensão está sendo
-  construída não há .NET SDK e o download do VS Code é bloqueado pela rede.
-  Ver a seção 9 para o impacto na verificação.
+  construída há Node e Python, mas não há .NET SDK, e o download do VS Code é
+  bloqueado pela rede. Ver a seção 9 para o impacto na verificação e nas
+  imagens.
 - API mínima: `engines.vscode` `^1.90.0` (a API de cobertura é estável desde
   a 1.88).
 
@@ -84,8 +94,8 @@ inteiro sem sair da interface nativa.
    de execução. Cobre execuções vindas de qualquer lugar e mantém um único
    caminho de leitura de relatórios. Custo: precisa de regras de mesclagem.
 2. **Só execuções disparadas pela extensão.** Mais simples, e a extensão
-   sempre sabe o escopo do que rodou. Descartada porque um `dotnet test` com
-   cobertura no terminal passaria despercebido, e detectar é um requisito.
+   sempre sabe o escopo do que rodou. Descartada porque uma execução com
+   cobertura no terminal passaria despercebida, e detectar é um requisito.
 3. **Interceptar comandos do terminal** (integração de shell). Descartada:
    depende de a integração de shell estar ativa, não enxerga tasks nem
    scripts, e interpretar linhas de comando arbitrárias é frágil.
@@ -94,6 +104,12 @@ inteiro sem sair da interface nativa.
 
 Decisão do usuário: o "como" foi delegado; a abordagem 1 foi a escolhida por
 quem escreveu este design e apresentada na conversa.
+
+A abordagem 1 também é a que torna barato atender três ecossistemas: a
+leitura de relatórios depende do **formato** (Cobertura, Istanbul JSON,
+LCOV), não da ferramenta. Quase toda ferramenta de teste de .NET, Node e
+Python sabe gravar um desses três. O que é específico de cada ferramenta fica
+isolado em um **adaptador** pequeno (seção 6).
 
 ## 5. Comportamento
 
@@ -105,11 +121,13 @@ com os arquivos de todos os projetos do workspace:
 
 ```
 TEST COVERAGE
-▾ api            (pasta 1 do workspace)
+▾ api            (pasta 1 do workspace, .NET)
     Services/OrderService.cs      █████████░  91%
     Services/TaxService.cs        ███░░░░░░░  34%
-▾ web            (pasta 2 do workspace)
+▾ web            (pasta 2 do workspace, Node)
     components/Cart.tsx           ████████░░  80%
+▾ jobs           (pasta 3 do workspace, Python)
+    jobs/cleanup.py               ██████░░░░  62%
 ```
 
 As cores (vermelho, amarelo, verde) e os limites vêm da configuração nativa
@@ -119,27 +137,36 @@ Além disso, um item na barra de status mostra o percentual total acumulado
 (linhas cobertas ÷ linhas totais de todos os arquivos) e indica quando há
 execução em andamento. Clicar nele executa "Show Coverage".
 
-### 5.2 Projetos
+### 5.2 Projetos e adaptadores
 
-Um **projeto** é a unidade de armazenamento e de execução:
+Um **projeto** é a unidade de armazenamento e de execução. Cada projeto é
+reconhecido por um **adaptador**, que também sabe montar o comando de
+cobertura dele.
 
-- **.NET:** um `.csproj` de testes — que referencia `Microsoft.NET.Test.Sdk`
-  ou declara `<IsTestProject>true</IsTestProject>`.
-- **Jest:** um diretório com `package.json` que tem configuração própria de
-  Jest: a chave `jest` no `package.json`, um arquivo `jest.config.*`, ou um
-  script `test` que chama `jest` ou `react-scripts test`. Ter `jest` apenas
-  nas dependências não basta.
+| Adaptador | Um projeto é… | Execução parcial (arquivo/pasta)? |
+|-----------|---------------|-----------------------------------|
+| `dotnet` | um `.csproj` de testes: referencia `Microsoft.NET.Test.Sdk` ou declara `<IsTestProject>true</IsTestProject>` | sim |
+| `jest` | um diretório com `package.json` e configuração própria de Jest: chave `jest`, arquivo `jest.config.*`, ou script `test` que chama `jest` ou `react-scripts test` | sim |
+| `vitest` | um diretório com `package.json` e arquivo `vitest.config.*`, bloco `test` em `vite.config.*`, ou script `test` que chama `vitest` | sim |
+| `node-generic` | qualquer outro diretório com `package.json` que tenha um script `test` real (Mocha, AVA, `node --test`, Jasmine, tap etc.) | não |
+| `pytest` | um diretório com marcador de projeto Python (`pyproject.toml`, `setup.py`, `setup.cfg`, `pytest.ini` ou `tox.ini`) que contenha arquivos de teste; sem marcador, a pasta do workspace que contém os arquivos de teste | sim |
 
-A extensão descobre os projetos em todas as pastas do workspace na ativação
-e redescobre quando `.csproj`, `package.json`, `jest.config.*` ou as pastas
-do workspace mudam. Ignora `node_modules`, `bin` e `obj`.
+Regras comuns:
 
-**Projetos Jest aninhados (monorepo).** Quando um diretório que se qualifica
-contém outros diretórios que também se qualificam, só os de dentro são
-projetos. O de fora é tratado como orquestrador e não é executado, para não
-rodar os mesmos testes duas vezes nem repassar argumentos do Jest a um
-script que só distribui a execução. *(Decisão de quem escreveu o design, a
-confirmar com o usuário.)*
+- Em um mesmo diretório Node, a ordem de escolha é: comando personalizado
+  (seção 5.7), `jest`, `vitest`, `node-generic`. Ter `jest` ou `vitest`
+  apenas nas dependências não basta. O script padrão do `npm init`
+  (`echo "Error: no test specified" && exit 1`) não conta como script real.
+- A descoberta acontece em todas as pastas do workspace na ativação e é
+  refeita quando `.csproj`, `package.json`, arquivos de configuração das
+  ferramentas, marcadores Python ou as pastas do workspace mudam. Ignora
+  `node_modules`, `bin`, `obj`, `.venv`, `venv` e `__pycache__`.
+- **Projetos aninhados (monorepo).** Quando um diretório que se qualifica
+  contém outros diretórios que também se qualificam **no mesmo ecossistema**,
+  só os de dentro são projetos. O de fora é tratado como orquestrador e não é
+  executado, para não rodar os mesmos testes duas vezes nem repassar
+  argumentos a um script que só distribui a execução. *(Decisão de quem
+  escreveu o design, a confirmar com o usuário.)*
 
 **.NET sobre Microsoft.Testing.Platform.** A primeira versão executa apenas
 projetos baseados em VSTest. Projetos que usam o Microsoft.Testing.Platform
@@ -154,31 +181,65 @@ com o usuário.)*
 
 ### 5.3 Formas de alimentar o acumulado
 
-**A. Execução pela extensão.** A extensão roda o comando, grava o relatório
-em um diretório temporário próprio (fora do workspace) e o lê ao terminar.
+**A. Execução pela extensão.** A extensão roda o comando do adaptador, faz o
+relatório ser gravado em um diretório temporário próprio (fora do workspace)
+e o lê ao terminar.
 
-| Alvo | Comando |
-|------|---------|
-| Projeto .NET | `dotnet test "<csproj>" --collect:"XPlat Code Coverage" --results-directory "<tmp>"` |
-| Arquivo ou pasta de teste .NET | o mesmo, mais `--filter` com as classes de teste encontradas no arquivo/pasta (`FullyQualifiedName~Namespace.Classe`, unidas por `\|`) |
-| Projeto Jest | `<pm> test --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` no ambiente para evitar modo watch |
-| Arquivo ou pasta de teste Jest | o mesmo, mais o caminho relativo como filtro de testes |
+| Adaptador | Comando (execução completa) | Filtro na execução parcial |
+|-----------|-----------------------------|----------------------------|
+| `dotnet` | `dotnet test "<csproj>" --collect:"XPlat Code Coverage" --results-directory "<tmp>"` | `--filter` com as classes de teste encontradas no arquivo/pasta (`FullyQualifiedName~Namespace.Classe`, unidas por `\|`) |
+| `jest` | `<pm> test --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | caminho relativo do arquivo/pasta |
+| `vitest` | `<pm> test --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>"`, com `CI=true` | caminho relativo do arquivo/pasta |
+| `node-generic` | `c8 --reporter=json --reports-dir="<tmp>" <pm> test`, usando o `c8` embutido na extensão | — |
+| `pytest` | `<python> -m pytest --cov --cov-report=xml:"<tmp>/coverage.xml"` | caminho relativo do arquivo/pasta |
 
-`<pm>` é `yarn`, `pnpm` ou `npm`, escolhido pelo lockfile presente (padrão
-`yarn` na ausência de lockfile). Com `npm`, os argumentos vão depois de `--`.
+- `<pm>` é `yarn`, `pnpm` ou `npm`, escolhido pelo lockfile presente (padrão
+  `npm` na ausência de lockfile). Com `npm`, os argumentos vão depois de `--`.
+- `CI=true` evita modo watch em Jest (inclusive via `react-scripts`) e Vitest.
+- **`node-generic` e o `c8`.** O `c8` mede cobertura pelo próprio motor V8 do
+  Node, por fora, então funciona com qualquer executor de testes sem mexer no
+  projeto. Ele é distribuído dentro do `.vsix` e chamado com o `node` do
+  usuário. Exceção: se o script `test` já chama `nyc` ou `c8`, a extensão não
+  embrulha de novo; roda o script como está e depois procura um relatório
+  reconhecido dentro do projeto (os mesmos padrões da detecção externa). Se
+  não encontrar, avisa que o script precisa gravar um relatório `lcov` ou
+  `json`.
+- **`<python>`** é resolvido nesta ordem: configuração
+  `coverageTools.python.interpreter`; interpretador selecionado na extensão
+  de Python da Microsoft, se instalada; `.venv` ou `venv` dentro do projeto;
+  `python3`; `python`.
+- **pytest** exige o plugin `pytest-cov` no ambiente do projeto, do mesmo
+  modo que .NET exige `coverlet.collector`.
 
 **B. Execução externa detectada.** A extensão observa arquivos de relatório
 no workspace e, quando um aparece ou muda, lê e incorpora:
 
-- `**/TestResults/**/*.cobertura.xml`
-- `**/coverage/coverage-final.json`
-- `**/coverage/lcov.info`
-- `**/coverage/cobertura-coverage.xml`
+| Padrão | Formato | Quem costuma gravar |
+|--------|---------|---------------------|
+| `**/TestResults/**/*.cobertura.xml` | Cobertura | `dotnet test` com coletor |
+| `**/coverage/coverage-final.json` | Istanbul JSON | Jest, Vitest, nyc, c8 |
+| `**/coverage/lcov.info` | LCOV | Jest, Vitest, nyc, c8, `node --test` |
+| `**/coverage/cobertura-coverage.xml` | Cobertura | Jest, Vitest, nyc, c8 |
+| `**/coverage.xml` | Cobertura | pytest-cov, coverage.py |
+| `**/coverage.lcov` | LCOV | pytest-cov, coverage.py |
+| `**/.coverage` | dados do coverage.py | `pytest --cov`, `coverage run` |
 
-O relatório é atribuído ao projeto descoberto mais próximo acima dele na
-árvore de diretórios. Mudanças são agrupadas por uma pequena janela de
-espera (debounce); se vários formatos aparecem juntos para o mesmo projeto,
-usa-se um só, nesta ordem de preferência: Istanbul JSON, Cobertura, LCOV.
+- O arquivo `.coverage` é um banco de dados binário do coverage.py. Quando
+  ele muda, a extensão o converte com
+  `<python> -m coverage xml --data-file=<arquivo> -o <tmp>/coverage.xml` e lê
+  o resultado. Assim um `pytest --cov` simples no terminal é detectado sem
+  exigir `--cov-report=xml`. Se a conversão falhar (coverage.py ausente no
+  interpretador resolvido), o motivo vai para o canal de saída, sem
+  notificação.
+- Um arquivo `coverage.xml` que não seja Cobertura (elemento raiz diferente
+  de `<coverage>`) é ignorado em silêncio.
+- O relatório é atribuído ao projeto descoberto mais próximo acima dele na
+  árvore de diretórios. Mudanças são agrupadas por uma pequena janela de
+  espera (debounce); se vários formatos aparecem juntos para o mesmo projeto,
+  usa-se um só, nesta ordem de preferência: Istanbul JSON, Cobertura, LCOV,
+  `.coverage`.
+- Relatórios que já existem no disco quando a extensão inicia **não** são
+  carregados (a extensão começa vazia).
 
 **Relatório sem projeto dono.** Acontece, por exemplo, com
 `dotnet test --results-directory ./TestResults` na raiz de uma solução: os
@@ -187,15 +248,13 @@ relatórios de todos os projetos caem em `TestResults/<GUID novo>/`, sem
 caso a chave é a **raiz de resultados** (o diretório acima da pasta de GUID
 no padrão `TestResults`, ou o diretório do relatório nos demais casos) mais
 uma **assinatura do conteúdo** (a lista ordenada dos assemblies/pacotes do
-relatório). Um relatório novo substitui o anterior de mesma chave, de modo
-que reexecutar atualiza em vez de acumular lixo, e os relatórios de projetos
-diferentes de uma mesma execução não se sobrescrevem. Limitação aceita: dois
-projetos de teste que instrumentam exatamente o mesmo conjunto de assemblies
-e gravam na mesma raiz compartilhada são confundidos, e o último substitui o
-anterior. *(Decisão de quem escreveu o design.)*
-
-Relatórios que já existem no disco quando a extensão inicia **não** são
-carregados (a extensão começa vazia).
+relatório; para formatos sem pacotes, a string vazia). Um relatório novo
+substitui o anterior de mesma chave, de modo que reexecutar atualiza em vez
+de acumular lixo, e os relatórios de projetos diferentes de uma mesma
+execução não se sobrescrevem. Limitação aceita: dois projetos de teste que
+instrumentam exatamente o mesmo conjunto de assemblies e gravam na mesma raiz
+compartilhada são confundidos, e o último substitui o anterior. *(Decisão de
+quem escreveu o design.)*
 
 ### 5.4 Regras de mesclagem
 
@@ -228,22 +287,27 @@ perda, usa-se o botão direito.
 
 Alvos válidos do botão direito, e o que cada um executa:
 
-- `.csproj` de testes → execução completa do projeto.
+- Arquivo que define um projeto (`.csproj` de testes, `package.json` de
+  projeto Node, `pyproject.toml`/`setup.py`/`setup.cfg`/`pytest.ini`/`tox.ini`
+  de projeto Python) → execução completa do projeto.
 - `.sln` → execução completa de cada projeto de testes listado na solução.
-- `package.json` de projeto Jest → execução completa do projeto.
-- Pasta que contém um ou mais projetos (inclusive a raiz de uma pasta do
-  workspace) → execução completa de cada um.
-- Pasta dentro de um projeto que contém arquivos de teste → execução parcial.
-- Arquivo de teste → execução parcial.
+- Pasta que é a raiz de um projeto, ou que contém um ou mais projetos
+  (inclusive a raiz de uma pasta do workspace) → execução completa de cada
+  um.
+- Pasta dentro de um projeto que contém arquivos de teste, quando o
+  adaptador aceita execução parcial → execução parcial.
+- Arquivo de teste, quando o adaptador aceita execução parcial → execução
+  parcial.
 
 Arquivo de teste é:
 
-- **Jest:** arquivo dentro de um projeto Jest que casa com o padrão do Jest
-  (`**/__tests__/**/*.[jt]s?(x)` ou `**/?(*.)+(spec|test).[jt]s?(x)`,
-  incluindo `.mjs`/`.cjs`/`.mts`/`.cts`).
-- **.NET:** arquivo `.cs` dentro de um projeto de testes cujo conteúdo tem
-  atributos de teste (`[Fact]`, `[Theory]`, `[Test]`, `[TestCase]`,
+- **`jest` e `vitest`:** arquivo dentro do projeto que casa com
+  `**/__tests__/**/*.[jt]s?(x)` ou `**/?(*.)+(spec|test).[jt]s?(x)`,
+  incluindo `.mjs`/`.cjs`/`.mts`/`.cts`.
+- **`dotnet`:** arquivo `.cs` dentro de um projeto de testes cujo conteúdo
+  tem atributos de teste (`[Fact]`, `[Theory]`, `[Test]`, `[TestCase]`,
   `[TestMethod]`, `[DataTestMethod]`).
+- **`pytest`:** arquivo `test_*.py` ou `*_test.py` dentro do projeto.
 
 A visibilidade do menu é controlada por uma chave de contexto com o conjunto
 de caminhos elegíveis, mantida pela descoberta
@@ -256,9 +320,10 @@ não aparece.
 - A saída dos comandos vai para o canal de saída "Coverage Tools".
 - **Testes falharam mas há relatório:** a cobertura é incorporada e um aviso
   informa que houve falhas.
-- **Sem relatório:** notificação de erro com botão para abrir a saída. Para
-  .NET, a mensagem sugere verificar o pacote `coverlet.collector` no projeto
-  de testes.
+- **Sem relatório:** notificação de erro com botão para abrir a saída e uma
+  dica específica do adaptador: `coverlet.collector` (.NET), `pytest-cov`
+  (Python), provedor de cobertura do Vitest (`@vitest/coverage-v8`), ou
+  relatório `lcov`/`json` no script (Node com `nyc`/`c8` próprio).
 - **Relatório malformado:** registrado na saída e ignorado; os dados
   anteriores do projeto são mantidos.
 - **Arquivos do relatório que não existem no disco** são descartados (por
@@ -270,12 +335,22 @@ não aparece.
 | Chave | Padrão | Função |
 |-------|--------|--------|
 | `coverageTools.watch.enabled` | `true` | Liga a detecção de execuções externas |
-| `coverageTools.watch.globs` | os quatro padrões da seção 5.3 | Onde procurar relatórios |
-| `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**` | Ignorado na descoberta e na observação |
+| `coverageTools.watch.globs` | os padrões da seção 5.3 | Onde procurar relatórios |
+| `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/__pycache__/**` | Ignorado na descoberta e na observação |
 | `coverageTools.dotnet.collector` | `XPlat Code Coverage` | Valor de `--collect` |
 | `coverageTools.dotnet.extraArgs` | `[]` | Argumentos adicionais para `dotnet test` |
-| `coverageTools.jest.command` | `""` (automático: `<pm> test`) | Comando base do Jest |
-| `coverageTools.jest.extraArgs` | `[]` | Argumentos adicionais para o Jest |
+| `coverageTools.node.extraArgs` | `[]` | Argumentos adicionais para o comando de testes Node |
+| `coverageTools.python.interpreter` | `""` (automático) | Interpretador Python a usar |
+| `coverageTools.python.extraArgs` | `[]` | Argumentos adicionais para o pytest |
+| `coverageTools.commands` | `{}` | Comando personalizado por projeto (ver abaixo) |
+
+**Comando personalizado.** Para qualquer projeto que os adaptadores não
+atendam (por exemplo, `unittest` puro, ou um executor Node incomum),
+`coverageTools.commands` mapeia o caminho do projeto, relativo à pasta do
+workspace, para uma linha de comando. O texto `${coverageDir}` é trocado pelo
+diretório temporário, e a extensão procura ali um relatório reconhecido ao
+fim. Um diretório listado aqui vira projeto mesmo que nenhum adaptador o
+reconheça, e aceita apenas execução completa.
 
 ## 6. Arquitetura
 
@@ -285,16 +360,20 @@ ser testado sem o VS Code:
 | Módulo | Responsabilidade | Depende do VS Code? |
 |--------|------------------|---------------------|
 | `model` | Tipos normalizados de cobertura: por arquivo, lista de instruções (intervalo + contagem), ramos (posição + contagem por braço) e declarações (nome + intervalo + contagem) | não |
-| `parsers/cobertura` | XML Cobertura → `model`. Resolve caminhos com `<sources>`; linhas viram instruções; `condition-coverage` vira ramos; `<method>` vira declarações | não |
+| `parsers/cobertura` | XML Cobertura → `model`. Resolve caminhos com `<sources>`; linhas viram instruções; `condition-coverage` vira ramos; `<method>` vira declarações. Atende os dialetos do coverlet, do Istanbul e do coverage.py | não |
 | `parsers/istanbul` | `coverage-final.json` → `model`, preservando intervalos exatos | não |
 | `parsers/lcov` | `lcov.info` → `model` (`DA`, `BRDA`, `FN`/`FNDA`) | não |
 | `store` | Mapa `projeto → arquivos`; `replace`, `union`, `clear`, `merged()`; emite evento de mudança | não |
-| `discovery` | Encontra projetos e alvos elegíveis; calcula o conjunto `runnablePaths` | parcial (busca de arquivos atrás de uma interface) |
-| `commands` (construção) | Monta linha de comando e ambiente para cada alvo | não |
+| `adapters/*` | Um por linha da tabela 5.2: reconhece o projeto, lista arquivos de teste, monta comando, ambiente e local do relatório para execução completa e parcial | não |
+| `discovery` | Percorre o workspace, aplica os adaptadores e a regra de aninhamento, calcula o conjunto `runnablePaths` | parcial (busca de arquivos atrás de uma interface) |
 | `runner` | Executa processos, fila, cancelamento, saída | parcial (canal de saída, progresso) |
-| `watcher` | Observa os globs, agrupa mudanças, atribui ao projeto, chama parser + `store.replace` | sim |
+| `watcher` | Observa os globs, agrupa mudanças, converte `.coverage`, atribui ao projeto, chama parser + `store.replace` | sim |
 | `publisher` | `TestController` + perfil de cobertura; converte `store.merged()` em `FileCoverage` e publica um `TestRun`; responde `loadDetailedCoverage` | sim |
 | `extension` | Ativação, registro de comandos, menus, barra de status, ligação entre módulos | sim |
+
+Acrescentar uma ferramenta nova é escrever um adaptador; acrescentar um
+formato novo é escrever um parser. Nenhum dos dois toca em `store` ou
+`publisher`.
 
 ### Publicação pela API nativa
 
@@ -314,6 +393,11 @@ sem itens de teste, só com cobertura, é exibida normalmente. A API não
 proíbe, mas isso precisa ser a primeira coisa validada. Plano B, se for
 necessário: registrar um item de teste por projeto e incluí-lo na execução.
 
+**Segundo risco:** o adaptador `node-generic` depende de o `c8` embutido
+medir corretamente projetos que transpilam em tempo de execução (ts-node,
+tsx, Babel). Deve ser validado com projetos de exemplo reais (Mocha em
+JavaScript, Mocha em TypeScript e `node --test`).
+
 ### Mesclagem no modelo
 
 A união de dois registros do mesmo arquivo casa instruções por intervalo,
@@ -321,46 +405,83 @@ ramos por posição e índice do braço, e declarações por nome e linha inicia
 somando as contagens. O que não casa (arquivo mudou entre execuções) é
 mantido dos dois lados.
 
-## 7. Pilha técnica (decisões de quem escreveu o design)
+## 7. Pilha técnica e documentação
 
-- TypeScript, empacotado com esbuild.
+Decisões de quem escreveu o design, salvo onde indicado:
+
+- TypeScript, empacotado com esbuild. O `c8` vai no `.vsix` como dependência
+  de execução.
 - Testes unitários com Vitest para os módulos sem VS Code.
 - Testes de integração com `@vscode/test-electron`.
 - Lint com ESLint; empacotamento com `@vscode/vsce`.
 - GitHub Actions: lint, testes unitários, testes de integração e geração do
   `.vsix` em cada push e pull request.
+- Identificação: nome `coverage-tools`, nome de exibição "Coverage Tools",
+  publisher `danilofg`.
 - Tudo o que é voltado ao usuário fica **somente em inglês**: textos da
   interface, `README.md` e `CHANGELOG.md` (decisão do usuário).
 - `CHANGELOG.md` segue o formato Keep a Changelog, com a seção
   `[Unreleased]` dividida em "Planned", "In progress" e "Done". O `README.md`
   tem uma tabela de estado por funcionalidade. Os dois são atualizados no
   mesmo commit de cada mudança visível ao usuário.
-- Identificação: nome `coverage-tools`, nome de exibição "Coverage Tools",
-  publisher `danilofg`.
+
+### Imagens de uso no README (pedido do usuário)
+
+O README ganha uma seção "Usage" em passos, cada passo com uma imagem:
+
+1. Rodar tudo: paleta de comandos com `Run All Coverage` e o progresso.
+2. Resultado: view Test Coverage com projetos de mais de um ecossistema.
+3. Linha a linha: um arquivo aberto com linhas cobertas e não cobertas.
+4. Botão direito: menu do Explorer com `Run Coverage Here` em um arquivo de
+   teste.
+5. Detecção automática: terminal rodando um teste com cobertura e a view
+   atualizando.
+6. Barra de status com o total e `Show Coverage`.
+
+Regras:
+
+- As imagens são **capturas reais** da extensão rodando sobre o workspace de
+  exemplo `samples/`, guardadas em `docs/images/`. Nada de montagens.
+- A captura é feita por um script automatizado (`npm run screenshots`), para
+  poder ser refeita sempre que a interface mudar.
+- Enquanto não houver capturas reais, o README não mostra imagens; a tabela
+  de estado indica que estão pendentes.
 
 ## 8. Fora do escopo desta versão, mas previsto pelo desenho
 
 - Carregar relatórios existentes ao iniciar (seria uma configuração a mais
   sobre o `watcher`).
-- Novos formatos e frameworks (um parser novo e uma entrada na descoberta).
+- Novos ecossistemas (um adaptador novo; parser novo só se o formato for
+  diferente dos três já lidos).
+- Execução de projetos .NET sobre Microsoft.Testing.Platform (um adaptador
+  novo).
 
 ## 9. Verificação
 
-- **Unitário:** parsers contra relatórios de exemplo (Cobertura no formato do
-  coverlet; Istanbul JSON e LCOV gerados por um Jest real), mesclagem do
-  `store`, descoberta em árvores de diretório temporárias, construção de
-  comandos, resolução de caminhos.
-- **Ponta a ponta com Jest real:** um projeto de exemplo em `samples/` é
-  executado de verdade no ambiente de desenvolvimento.
+- **Unitário:** parsers contra relatórios de exemplo de cada dialeto,
+  mesclagem do `store`, descoberta em árvores de diretório temporárias,
+  construção de comandos de cada adaptador, resolução de caminhos.
+- **Ponta a ponta com ferramentas reais, no ambiente de desenvolvimento:**
+  projetos de exemplo em `samples/` para Jest, Vitest, Mocha (via
+  `node-generic`), `node --test` e pytest são executados de verdade, e os
+  relatórios gerados alimentam os testes dos parsers.
 - **Integração no VS Code:** ativação, registro de comandos, publicação de
   uma cobertura de exemplo sem erros. Roda no GitHub Actions, onde o download
   do VS Code funciona.
-- **.NET real e aparência final:** não podem ser verificados no contêiner de
-  desenvolvimento (sem .NET SDK, VS Code bloqueado pela rede). Ficam cobertos
-  por relatórios de exemplo, pelo CI e por uma verificação manual do usuário
-  com o `.vsix` em um workspace `samples/` multi-root (um projeto Jest e um
-  projeto .NET), salvo se o ambiente for liberado para baixar o VS Code e o
-  .NET SDK.
+- **.NET real:** não pode ser executado no contêiner de desenvolvimento (sem
+  .NET SDK). Fica coberto por relatórios de exemplo no formato do coverlet,
+  por um job de GitHub Actions que roda `dotnet test` de verdade no projeto
+  de exemplo, e por verificação manual do usuário.
+- **Aparência final e capturas de tela:** exigem um VS Code real rodando.
+  Caminhos possíveis, em ordem de preferência, a decidir no plano:
+  1. liberar na rede do ambiente o download do VS Code, e rodar o script de
+     captura no próprio contêiner;
+  2. rodar a extensão no `code-server` (distribuição do VS Code para
+     navegador, instalável pelo npm) dentro do contêiner e capturar com o
+     navegador já disponível;
+  3. gerar as capturas em um job de GitHub Actions e trazê-las para o
+     repositório;
+  4. o usuário captura manualmente seguindo um roteiro.
 
 ## 10. O que fica a cargo de quem implementa
 
@@ -369,3 +490,4 @@ mantido dos dois lados.
 - Como derivar as classes de teste de um arquivo `.cs` para o `--filter`.
 - Detalhes de escape de argumentos por sistema operacional.
 - Estrutura dos projetos de exemplo em `samples/`.
+- Como o script de captura dirige o VS Code.

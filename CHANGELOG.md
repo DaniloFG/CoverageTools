@@ -28,10 +28,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `Run Coverage Here` in the Explorer right-click menu for a test project,
   folder, or test file.
 - `Show Coverage` and `Clear Coverage` commands.
-- .NET support through `dotnet test` and Cobertura reports.
-- Jest support through `yarn`, `npm`, or `pnpm`, reading Istanbul JSON, LCOV,
-  and Cobertura reports.
+- .NET (C#) support through `dotnet test` and Cobertura reports.
+- Node support for Jest and Vitest through `yarn`, `npm`, or `pnpm`, and for
+  any other tool run by the `test` script (Mocha, AVA, `node --test`, …)
+  through a bundled c8.
+- Python support through pytest and pytest-cov, including detection of
+  coverage.py `.coverage` data files.
+- Reading of Cobertura, Istanbul JSON, and LCOV reports, whatever tool wrote
+  them.
+- Custom coverage command per project (`coverageTools.commands`).
 - Status bar item with the accumulated total.
+- Usage screenshots in the README, captured from the sample workspace.
 
 ### In progress
 
