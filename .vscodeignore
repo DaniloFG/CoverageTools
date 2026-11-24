@@ -1,0 +1,12 @@
+# Exclude everything, then re-include only what the packaged extension needs.
+# vsce only packages production dependencies, so re-including node_modules
+# brings in c8 and its runtime dependencies and nothing from devDependencies.
+# Source maps from development builds are left out (negations win in vsce).
+**
+!dist/**/*.js
+!node_modules/**
+!README.md
+!CHANGELOG.md
+!LICENSE
+!docs/images/**
+!package.json
