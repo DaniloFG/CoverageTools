@@ -180,7 +180,13 @@ Regras comuns:
   apenas nas dependências não basta. O script padrão do `npm init`
   (`echo "Error: no test specified" && exit 1`) não conta como script real.
 - Propriedades de projeto .NET são procuradas no `.csproj` e nos arquivos
-  `Directory.Build.props` e `Directory.Packages.props` acima dele.
+  `Directory.Build.props`, `Directory.Packages.props` e
+  `Directory.Build.targets` do diretório dele até a raiz (no máximo 20
+  níveis), mais o `global.json` mais próximo. A leitura é textual (o MSBuild
+  não é executado): condições não são avaliadas; nos arquivos importados,
+  elementos com `Condition` são ignorados (costumam valer só para alguns
+  projetos), e no `.csproj` são mantidos (costumam escolher o framework de
+  destino). Nomes de pacote são comparados sem diferenciar maiúsculas.
 - A descoberta acontece em todas as pastas do workspace depois da ativação e
   é refeita quando `.csproj`, `package.json`, arquivos de configuração das
   ferramentas, marcadores Python ou as pastas do workspace mudam. Ignora
@@ -201,7 +207,7 @@ e o lê ao terminar.
 
 | Adaptador | Comando (execução completa) | Filtro na execução parcial |
 |-----------|-----------------------------|----------------------------|
-| `dotnet-vstest` | `dotnet test "<csproj>" <coleta> --results-directory "<tmp>"` | `--filter` com as classes de teste do arquivo/pasta (`FullyQualifiedName~Namespace.Classe`, unidas por `\|`) |
+| `dotnet-vstest` | `dotnet test "<csproj>" <coleta> --results-directory "<tmp>"` | `--filter` com as classes de teste do arquivo/pasta (`FullyQualifiedName~Namespace.Classe.`, com ponto final, unidas por `\|`; classe aninhada como `Namespace.Externa+Interna.`) |
 | `dotnet-mtp` | `dotnet run --project "<csproj>" -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml"` | conforme o framework (abaixo) |
 | `jest` | `<jest> --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | caminho relativo do arquivo/pasta |
 | `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>"`, com `CI=true` | caminho relativo do arquivo/pasta |
@@ -244,6 +250,28 @@ e o lê ao terminar.
   dos dois, `--collect:"Code Coverage;Format=cobertura"`, que usa o coletor
   da Microsoft que já acompanha o `Microsoft.NET.Test.Sdk`. A configuração
   `coverageTools.dotnet.collector` força um valor.
+- **Confirmado com execuções reais** (SDK 8.0.134, Linux, 2026-11-24; xUnit
+  e NUnit), sem shell, cada argumento como um elemento do argv e **sem
+  aspas embutidas**: `--collect:XPlat Code Coverage` e
+  `--collect:Code Coverage;Format=cobertura` são um argumento só cada (o `;`
+  não precisa de escape), assim como `--filter` e a expressão inteira
+  `FullyQualifiedName~A.B.|FullyQualifiedName~A.C.`; `/p:CoverletOutput=<tmp>/`
+  também vai sem aspas e funciona com espaços no caminho. A barra final é
+  `/` em qualquer sistema: uma `\` final escaparia a aspa de fechamento no
+  Windows. Onde cada coleta grava (o adaptador procura recursivamente em
+  `<tmp>`):
+
+  | Coleta | Relatório |
+  |--------|-----------|
+  | `coverlet.collector` | `<tmp>/<GUID>/coverage.cobertura.xml` |
+  | coletor da Microsoft | `<tmp>/<GUID>/<usuário>_<máquina>_<data-hora>.cobertura.xml` |
+  | `coverlet.msbuild` | `<tmp>/coverage.cobertura.xml` |
+
+  Nos três casos nada é criado dentro do projeto (nem `TestResults/`). O
+  coverlet grava `<source>/</source>` e caminhos relativos a ela; o coletor
+  da Microsoft grava caminhos absolutos e também mede os assemblies de
+  teste. O ponto final no filtro evita que `~` (contém) pegue também classes
+  cujo nome começa igual (`CalcTests` e `CalcTestsSlow`).
 - **Microsoft.Testing.Platform.** O projeto de testes é um executável, então
   `dotnet run` funciona igual em qualquer versão do SDK e modo de
   `dotnet test`. As opções `--coverage*` vêm da extensão de cobertura da
@@ -393,7 +421,8 @@ Arquivo de teste é:
   incluindo `.mjs`/`.cjs`/`.mts`/`.cts`.
 - **`dotnet-vstest` e `dotnet-mtp`:** arquivo `.cs` dentro de um projeto de testes cujo conteúdo
   tem atributos de teste (`[Fact]`, `[Theory]`, `[Test]`, `[TestCase]`,
-  `[TestMethod]`, `[DataTestMethod]`; no TUnit, `[Test]`).
+  `[TestCaseSource]`, `[TestMethod]`, `[DataTestMethod]`; no TUnit, `[Test]`),
+  fora de `bin/` e `obj/`. Comentários e strings não contam.
 - **`python`:** arquivo `test_*.py` ou `*_test.py` dentro do projeto.
 
 A visibilidade do menu é controlada por uma chave de contexto com o conjunto
@@ -554,9 +583,10 @@ proíbe, mas isso precisa ser a primeira coisa validada. Plano B, se for
 necessário: registrar um item de teste por projeto e incluí-lo na execução.
 
 **Outros riscos, a validar com execuções reais:** as linhas de comando do
-adaptador `dotnet-mtp` e do coletor da Microsoft no VSTest foram escritas sem
-poder rodar .NET no ambiente de desenvolvimento e precisam ser confirmadas no
-GitHub Actions antes de serem dadas como prontas. E o adaptador `node-generic` depende de o `c8` embutido
+adaptador `dotnet-mtp` foram escritas sem poder rodar .NET no ambiente de
+desenvolvimento e precisam ser confirmadas no GitHub Actions antes de serem
+dadas como prontas (as do VSTest, inclusive o coletor da Microsoft, foram
+confirmadas em 2026-11-24; seção 5.3). E o adaptador `node-generic` depende de o `c8` embutido
 medir corretamente projetos que transpilam em tempo de execução (ts-node,
 tsx, Babel). Deve ser validado com projetos de exemplo reais (Mocha em
 JavaScript, Mocha em TypeScript e `node --test`).
