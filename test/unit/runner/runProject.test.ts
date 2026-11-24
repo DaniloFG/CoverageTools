@@ -358,3 +358,25 @@ test('a report new to the run is ingested even when its mtime is older than the 
   expect((await runProject(project, full, deps(), live())).status).toBe('ok');
   expect(linesOf(srcA)).toEqual([[1, 6], [2, 0]]);
 });
+
+test('relative report paths resolve against the project that ran before the other roots', async () => {
+  const rootA = path.join(root, 'first');
+  const rootB = path.join(root, 'second');
+  for (const r of [rootA, rootB]) {
+    mkdirSync(path.join(r, 'src'), { recursive: true });
+    writeFileSync(path.join(r, 'src', 'calc.js'), 'add();\n');
+  }
+  const inB: Project = { ...project, key: 'project:second', dir: rootB, meta: { workspaceFolder: root } };
+  const relative = 'TN:\nSF:src/calc.js\nDA:1,3\nend_of_record\n';
+  planFor = ctx => ({
+    steps: [{ command: NODE, args: ['-e', 'require("fs").writeFileSync(process.argv[1], process.argv[2])', path.join(ctx.tmpDir, 'lcov.info'), relative], cwd: rootB }],
+    reportSearchDir: ctx.tmpDir,
+    hint: '',
+  });
+  let seenRoots: readonly string[] = [];
+  const recording = { parse: async (p: string, roots: readonly string[]) => { seenRoots = roots; return loadReport(p, roots); } } as unknown as ParserClient;
+  const outcome = await runProject(inB, full, deps({ roots: [rootA, rootB, root], parser: recording }), live());
+  expect(outcome.status).toBe('ok');
+  expect(store.merged().map(e => e.path)).toEqual([path.join(rootB, 'src', 'calc.js')]);
+  expect(seenRoots).toEqual([rootB, root, rootA]);
+});

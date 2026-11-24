@@ -95,10 +95,11 @@ export async function runProject(project: Project, target: RunTarget, deps: RunD
 
     // The best candidate first; one that turns out not to be a readable report gives way to the next.
     const errors: string[] = [];
+    const roots = rootsFor(project, deps.roots);
     let parsed;
     for (const report of candidates) {
       try {
-        parsed = await deps.parser.parse(report, deps.roots);
+        parsed = await deps.parser.parse(report, roots);
         break;
       } catch (e) {
         if (signal.aborted) return cancelled();
@@ -123,6 +124,15 @@ export async function runProject(project: Project, target: RunTarget, deps: RunD
     }
     if (tmpDir !== undefined) await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * The roots relative report paths are resolved against, the project's own location first: in a
+ * multi-root workspace another root may hold a file with the same relative path.
+ */
+function rootsFor(project: Project, roots: readonly string[]): string[] {
+  const folder = project.meta.workspaceFolder;
+  return [...new Set([project.dir, ...(typeof folder === 'string' ? [folder] : []), ...roots])];
 }
 
 async function probe(spec: CommandSpec, signal: AbortSignal): Promise<{ code: number | null; stdout: string }> {
