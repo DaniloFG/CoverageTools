@@ -62,6 +62,7 @@ test('truncated JSON throws ReportParseError', () => {
 test('JSON that is not an object of file entries throws NotCoverageReportError', () => {
   expect(() => parseIstanbul('[1, 2]', ctx)).toThrow(NotCoverageReportError);
   expect(() => parseIstanbul('{"name": "pkg", "version": "1.0.0"}', ctx)).toThrow(NotCoverageReportError);
+  expect(() => parseIstanbul('{"total": {"lines": {"pct": 50}}}', ctx)).toThrow(NotCoverageReportError);
 });
 
 test('an empty object is a valid report with zero files', () => {

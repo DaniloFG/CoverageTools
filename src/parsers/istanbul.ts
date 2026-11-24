@@ -86,7 +86,10 @@ export function parseIstanbul(json: string, ctx: ParseContext): ParsedReport {
   }
   if (!isObject(root)) throw new NotCoverageReportError('Not an Istanbul report: the top level is not an object');
   for (const key in root) {
-    if (!isObject(root[key])) throw new NotCoverageReportError(`Not an Istanbul report: entry "${key}" is not an object`);
+    const entry = root[key];
+    if (!isObject(entry) || !isObject(entry.statementMap)) {
+      throw new NotCoverageReportError(`Not an Istanbul report: entry "${key}" is not a file entry with a statementMap`);
+    }
   }
 
   const builders = new Map<string, FileBuilder>();
