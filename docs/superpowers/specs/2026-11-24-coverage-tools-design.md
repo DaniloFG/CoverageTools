@@ -209,8 +209,8 @@ e o lê ao terminar.
 |-----------|-----------------------------|----------------------------|
 | `dotnet-vstest` | `dotnet test "<csproj>" <coleta> --results-directory "<tmp>"` | `--filter` com as classes de teste do arquivo/pasta (`FullyQualifiedName~Namespace.Classe.`, com ponto final, unidas por `\|`; classe aninhada como `Namespace.Externa+Interna.`) |
 | `dotnet-mtp` | `dotnet run --project "<csproj>" -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml"` | conforme o framework (abaixo) |
-| `jest` | `<jest> --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | caminho relativo do arquivo/pasta |
-| `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>"`, com `CI=true` | caminho relativo do arquivo/pasta |
+| `jest` | `<jest> --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | `--runTestsByPath` seguido dos arquivos de teste selecionados (uma pasta vira os arquivos de teste dentro dela), caminhos relativos |
+| `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>"`, com `CI=true` | os arquivos de teste selecionados, caminhos relativos, precedidos de `--exclude=<arquivo>` para cada outro arquivo de teste que o filtro também pegaria |
 | `node-generic` | `c8 --reporter=json --reports-dir="<tmp>" <comando de teste>`, usando o `c8` embutido na extensão | — |
 | `python` | conforme o que existe no ambiente (abaixo) | caminho relativo do arquivo/pasta |
 
@@ -221,13 +221,32 @@ e o lê ao terminar.
 - `<jest>` e `<vitest>` são `<pm> test` **somente quando o script `test`
   termina na chamada da ferramenta**, de modo que argumentos acrescentados
   cheguem a ela. Isso inclui prefixos de ambiente (`cross-env X=1 jest`) e
-  um nível de redirecionamento (`"test": "npm run test:unit"`, caso em que se
-  usa o script de destino). Em qualquer outro caso — não há script, ou ele
-  encadeia comandos (`jest && eslint .`) — a extensão chama o executável
-  local (`yarn jest`, `pnpm exec jest`, `npx --no-install jest`). Variáveis e
-  opções que só existiam no script encadeado se perdem nesse caminho; quem
-  depende delas usa o comando personalizado (seção 5.7). Com `npm`, os
-  argumentos do script vão depois de `--`.
+  um nível de redirecionamento. Quando o redirecionamento repassa argumentos
+  acrescentados (`yarn test:unit`, `pnpm run test:unit`,
+  `npm run test:unit -- --ci`), roda-se o próprio script `test`, que mantém
+  suas variáveis e argumentos. Um `npm run test:unit` puro tomaria para o npm
+  as opções acrescentadas; nesse caso roda-se o script de destino, levando
+  as atribuições `VAR=valor` da linha de `test` para o ambiente do comando.
+  Em qualquer outro caso — não há script, ele encadeia comandos
+  (`jest && eslint .`), roda em segundo plano ou redireciona a saída (`&`,
+  `>`, `<`), ou liga o modo watch (`--watch`, `--watchAll`; no Vitest também
+  `-w` e os subcomandos `watch`/`dev`) — a extensão chama o executável local
+  (`yarn jest`, `pnpm exec jest`, `npx --no-install jest`; no Vitest,
+  `… vitest run`). Variáveis e opções que só existiam no script encadeado se
+  perdem nesse caminho; quem depende delas usa o comando personalizado
+  (seção 5.7). Com `npm`, os argumentos do script vão depois de `--`. A busca
+  do lockfile para na pasta do workspace do projeto.
+- **A execução parcial é exata.** O Jest lê argumentos posicionais como
+  expressões regulares (unidas por "ou" a padrões que o script já tenha),
+  então `--runTestsByPath` os torna caminhos exatos. O Vitest (versão 4)
+  compara cada filtro como trecho do caminho relativo, sem diferenciar
+  maiúsculas, e não oferece forma exata nem `--include` na linha de comando;
+  por isso a extensão acrescenta `--exclude` para os demais arquivos de
+  teste que contêm o filtro (com os caracteres de glob escapados). Os
+  arquivos de teste considerados são os dos padrões padrão (`*.test.*`,
+  `*.spec.*`, `__tests__/`); um projeto com `include` diferente pode ainda
+  rodar algum arquivo a mais. Pasta sem arquivos de teste não roda nada e
+  avisa o usuário.
 - `CI=true` evita modo watch em Jest (inclusive via `react-scripts`) e Vitest.
 - **`node-generic` e o `c8`.** O `c8` mede cobertura pelo próprio motor V8 do
   Node, por fora, então funciona com qualquer executor de testes sem mexer no
