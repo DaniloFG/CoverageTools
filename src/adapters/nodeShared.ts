@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { FsReader } from './types';
+import type { FsReader, Project } from './types';
 
 /** The parts of a package.json the Node adapters read. */
 export interface PackageJson {
@@ -50,7 +50,10 @@ export async function readPackageJson(file: string, fs: FsReader): Promise<Packa
   }
 }
 
-/** Splits a script line into words, honoring quotes; undefined when it chains commands (`&&`, `||`, `;`, `|`). */
+/**
+ * Splits a script line into words, honoring quotes; undefined when it is more than one plain command:
+ * chained (`&&`, `||`, `;`, `|`), run in the background (`&`) or redirected (`>`, `<`).
+ */
 function tokenize(line: string): string[] | undefined {
   const words: string[] = [];
   let word: string | undefined;
@@ -63,7 +66,7 @@ function tokenize(line: string): string[] | undefined {
     } else if (c === '"' || c === "'") {
       quote = c;
       word = word ?? '';
-    } else if (c === ';' || c === '|' || (c === '&' && line[i + 1] === '&')) {
+    } else if (c === ';' || c === '|' || c === '&' || c === '>' || c === '<') {
       return undefined;
     } else if (/\s/.test(c)) {
       if (word !== undefined) words.push(word);
@@ -91,7 +94,24 @@ function toolName(word: string): string {
   return parts[parts.length - 1].replace(/\.(?:c?m?js|cmd|exe)$/i, '');
 }
 
-type Parsed = { kind: 'tool'; line: string } | { kind: 'script'; name: string };
+type Parsed =
+  | { kind: 'tool'; line: string }
+  /**
+   * Another script of the package. `forwards`: arguments appended to this line reach the target script
+   * (yarn and pnpm always forward them; npm only after `--`). `args`: the arguments the line passes on.
+   * `env`: the `VAR=value` assignments in front of the command.
+   */
+  | { kind: 'script'; name: string; forwards: boolean; args: string[]; env: Record<string, string> };
+
+/** What follows `npm run <name>`: forwarded when there is a `--`, else only npm's own options are allowed. */
+function npmRedirection(name: string | undefined, rest: string[], env: Record<string, string>): Parsed | undefined {
+  if (name === undefined) return undefined;
+  const dashes = rest.indexOf('--');
+  if (dashes >= 0) return { kind: 'script', name, forwards: true, args: rest.slice(dashes + 1), env };
+  // Words that are not npm options would be passed on positionally and lost when the target is run directly.
+  if (rest.some(w => !w.startsWith('-'))) return undefined;
+  return { kind: 'script', name, forwards: false, args: [], env };
+}
 
 /**
  * What a script line runs: either another script of the package (`npm run x`, `yarn x`, `pnpm x`...)
@@ -100,11 +120,16 @@ type Parsed = { kind: 'tool'; line: string } | { kind: 'script'; name: string };
 function parseLine(line: string, scripts: Record<string, string>): Parsed | undefined {
   const words = tokenize(line);
   if (words === undefined) return undefined;
+  const env: Record<string, string> = {};
   let i = 0;
   for (;;) {
     const w = words[i];
     if (w === undefined) return undefined;
-    if (ENV_ASSIGNMENT.test(w) || w === 'env' || w === 'cross-env') {
+    if (ENV_ASSIGNMENT.test(w)) {
+      const eq = w.indexOf('=');
+      env[w.slice(0, eq)] = w.slice(eq + 1);
+      i++;
+    } else if (w === 'env' || w === 'cross-env') {
       i++;
     } else if (w === 'npx' || w === 'pnpx') {
       i++;
@@ -114,14 +139,17 @@ function parseLine(line: string, scripts: Record<string, string>): Parsed | unde
       while (words[i]?.startsWith('-')) i++;
       if (words[i] === '--') i++;
     } else if (w === 'npm' && (words[i + 1] === 'run' || words[i + 1] === 'run-script')) {
-      const name = words[i + 2];
-      return name === undefined ? undefined : { kind: 'script', name };
+      let j = i + 2;
+      while (words[j]?.startsWith('-') && words[j] !== '--') j++; // npm's own options
+      return npmRedirection(words[j], words.slice(j + 1), env);
     } else if ((w === 'yarn' || w === 'pnpm') && words[i + 1] === 'run') {
       const name = words[i + 2];
-      return name === undefined ? undefined : { kind: 'script', name };
+      return name === undefined ? undefined : { kind: 'script', name, forwards: true, args: words.slice(i + 3), env };
     } else if ((w === 'yarn' || w === 'pnpm') && words[i + 1] !== undefined && !words[i + 1].startsWith('-')) {
       // `yarn x` runs the script x when there is one, and the binary x otherwise.
-      if (Object.hasOwn(scripts, words[i + 1])) return { kind: 'script', name: words[i + 1] };
+      if (Object.hasOwn(scripts, words[i + 1])) {
+        return { kind: 'script', name: words[i + 1], forwards: true, args: words.slice(i + 2), env };
+      }
       i++;
     } else if (toolName(w) === 'node' && words[i + 1] !== undefined) {
       i++;
@@ -135,25 +163,73 @@ function parseLine(line: string, scripts: Record<string, string>): Parsed | unde
   }
 }
 
-/**
- * The name of the script that runs `tool` as its whole command: the `test` script, or the script it
- * redirects to (one level). `tool` is matched against the command with env-var prefixes, wrappers
- * (`npx`, `yarn`, `pnpm exec`, `node <flags>`) and the binary's directory removed, e.g. `jest --ci`.
- * Undefined when the line chains several commands or runs something else.
- */
-export function scriptTailCalls(pkg: PackageJson, tool: RegExp): string | undefined {
-  const scripts = pkg.scripts ?? {};
-  let name = 'test';
-  for (let depth = 0; depth < 2; depth++) {
-    const line = Object.hasOwn(scripts, name) ? scripts[name] : undefined;
-    if (typeof line !== 'string') return undefined;
-    const parsed = parseLine(line, scripts);
-    if (parsed === undefined) return undefined;
-    if (parsed.kind === 'tool') return tool.test(parsed.line) ? name : undefined;
-    name = parsed.name;
-  }
-  return undefined;
+/** The script to run and the env it needs; see `scriptTailCalls`. */
+export interface ScriptCall {
+  script: string;
+  env: Record<string, string>;
 }
+
+/**
+ * How to run the `test` script so that arguments appended to it reach `tool` as its whole command.
+ * `tool` is matched against the command with env-var prefixes, wrappers (`npx`, `yarn`, `pnpm exec`,
+ * `node <flags>`) and the binary's directory removed, e.g. `jest --ci`. One redirection is followed:
+ * when it forwards appended arguments (`yarn x`, `pnpm run x`, `npm run x -- --ci`) the `test` script
+ * itself is run, keeping its env and arguments; a bare `npm run x` would take appended options for npm,
+ * so `x` is run with the `VAR=value` assignments of the `test` line in `env`. Undefined when a line
+ * chains several commands, runs something else, or the command matches `watch` (it would never end).
+ */
+export function scriptTailCalls(pkg: PackageJson, tool: RegExp, watch?: RegExp): ScriptCall | undefined {
+  const scripts = pkg.scripts ?? {};
+  const lineOf = (name: string): string | undefined => {
+    const line = Object.hasOwn(scripts, name) ? scripts[name] : undefined;
+    return typeof line === 'string' ? line : undefined;
+  };
+  const usable = (toolLine: string): boolean => tool.test(toolLine) && !(watch?.test(toolLine) ?? false);
+
+  const testLine = lineOf('test');
+  if (testLine === undefined) return undefined;
+  const outer = parseLine(testLine, scripts);
+  if (outer === undefined) return undefined;
+  if (outer.kind === 'tool') return usable(outer.line) ? { script: 'test', env: {} } : undefined;
+
+  const targetLine = lineOf(outer.name);
+  const inner = targetLine === undefined ? undefined : parseLine(targetLine, scripts);
+  if (inner?.kind !== 'tool') return undefined;
+  if (!usable([inner.line, ...outer.args].join(' '))) return undefined;
+  return outer.forwards ? { script: 'test', env: {} } : { script: outer.name, env: outer.env };
+}
+
+/** The workspace folder discovery recorded on the project (`meta.workspaceFolder`), if any. */
+export function workspaceFolderOf(project: Project): string | undefined {
+  const folder = project.meta.workspaceFolder;
+  return typeof folder === 'string' ? folder : undefined;
+}
+
+/**
+ * The test files a partial run selects, sorted and without duplicates: each path that is a test file,
+ * and the test files under each path that is a directory, skipping `exclude` (globs relative to it).
+ * `isTestFile` gets the path relative to `dir` with forward slashes.
+ */
+export async function selectedTestFiles(
+  dir: string, paths: readonly string[], fs: FsReader, exclude: readonly string[], isTestFile: (rel: string) => boolean,
+): Promise<string[]> {
+  const selected = new Set<string>();
+  const accept = (p: string): void => {
+    const rel = relativePosix(dir, p);
+    if (!rel.startsWith('../') && !path.isAbsolute(rel) && !rel.split('/').includes('node_modules') && isTestFile(rel)) {
+      selected.add(p);
+    }
+  };
+  for (const p of paths) {
+    const under = await fs.find(p, ['**/*'], exclude);
+    if (under.length > 0) under.forEach(accept);
+    else accept(p);
+  }
+  return [...selected].sort();
+}
+
+/** Shown when a partial run selects no test file. */
+export const NO_TEST_FILES_HINT = 'No test files were found in the selected folder.';
 
 /** Runs a package script with extra arguments: npm puts them after `--`, yarn and pnpm do not. */
 export function scriptCommand(pm: PackageManager, script: string, extra: readonly string[]): { command: string; args: string[] } {

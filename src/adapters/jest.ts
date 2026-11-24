@@ -1,9 +1,14 @@
 import path from 'node:path';
-import { localBin, NODE_TEST_FILE, packageManagerOf, readPackageJson, relativePosix, scriptCommand, scriptTailCalls } from './nodeShared';
+import {
+  localBin, NO_TEST_FILES_HINT, NODE_TEST_FILE, packageManagerOf, readPackageJson, relativePosix, scriptCommand, scriptTailCalls,
+  selectedTestFiles, workspaceFolderOf,
+} from './nodeShared';
 import type { Adapter, FsReader, Project } from './types';
 
 /** A script command that runs Jest (Create React App's `react-scripts test` wraps it). */
 const JEST_TOOL = /^(?:jest|react-scripts test)(?:\s|$)/;
+/** Watch flags `CI=true` does not override (Jest's `-w` is --maxWorkers, not watch). */
+const JEST_WATCH = /\s--watch(?:All)?(?:=true)?(?:\s|$)/;
 const CONFIG_FILES = ['js', 'ts', 'mjs', 'cjs', 'mts', 'cts', 'json'].map(ext => `jest.config.${ext}`);
 const HINT = 'Jest did not write a coverage report. Check that the project\'s tests run with "--coverage".';
 
@@ -45,18 +50,25 @@ export const jestAdapter: Adapter = {
 
   async plan(project, target, ctx) {
     const pkg = (await readPackageJson(path.join(project.dir, 'package.json'), ctx.fs)) ?? {};
-    const pm = await packageManagerOf(project.dir, ctx.fs);
+    const pm = await packageManagerOf(project.dir, ctx.fs, workspaceFolderOf(project));
+    let selection: string[] = [];
+    if (target.kind === 'partial') {
+      const files = await selectedTestFiles(project.dir, target.paths, ctx.fs, ctx.settings.exclude, rel => NODE_TEST_FILE.test(rel));
+      if (files.length === 0) return { steps: [], reportSearchDir: ctx.tmpDir, hint: NO_TEST_FILES_HINT };
+      // Positional arguments are regexes ORed with any pattern in the script; --runTestsByPath makes them exact paths.
+      selection = ['--runTestsByPath', ...files.map(p => relativePosix(project.dir, p))];
+    }
     const args = [
       '--coverage',
       '--coverageReporters=json',
       `--coverageDirectory=${ctx.tmpDir}`,
       ...ctx.settings.nodeExtraArgs,
-      ...(target.kind === 'partial' ? target.paths.map(p => relativePosix(project.dir, p)) : []),
+      ...selection,
     ];
-    const script = scriptTailCalls(pkg, JEST_TOOL);
-    const { command, args: fullArgs } = script !== undefined ? scriptCommand(pm, script, args) : localBin(pm, 'jest', args);
+    const call = scriptTailCalls(pkg, JEST_TOOL, JEST_WATCH);
+    const { command, args: fullArgs } = call !== undefined ? scriptCommand(pm, call.script, args) : localBin(pm, 'jest', args);
     return {
-      steps: [{ command, args: fullArgs, cwd: project.dir, env: { CI: 'true' } }],
+      steps: [{ command, args: fullArgs, cwd: project.dir, env: { ...call?.env, CI: 'true' } }],
       reportSearchDir: ctx.tmpDir,
       hint: HINT,
     };

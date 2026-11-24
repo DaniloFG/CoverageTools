@@ -83,11 +83,72 @@ test('full plan calls the local binary when there is no usable script', async ()
   });
 });
 
-test('partial plan appends the paths relative to the project, with forward slashes, after extra args', async () => {
-  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'jest' } }), [path.join(dir, 'yarn.lock')]: '' });
-  const paths = [path.join(dir, 'src', 'a.test.js'), path.join(dir, 'src', 'deep', '__tests__', 'b.js')];
-  const plan = await jestAdapter.plan(project, { kind: 'partial', paths }, ctx(fs, { nodeExtraArgs: ['--silent'] }));
-  expect(plan.steps[0].args).toEqual(['run', 'test', ...COVERAGE_ARGS, '--silent', 'src/a.test.js', 'src/deep/__tests__/b.js']);
+test('partial plan runs exactly the given test files with --runTestsByPath, after extra args', async () => {
+  const a = path.join(dir, 'src', 'a.test.js');
+  const slug = path.join(dir, 'app', '[slug]', 'page.test.tsx');
+  const { project, fs } = await projectOf({
+    [pkgFile]: pkg({ scripts: { test: 'jest' } }), [path.join(dir, 'yarn.lock')]: '', [a]: '', [slug]: '',
+  });
+  const plan = await jestAdapter.plan(project, { kind: 'partial', paths: [a, slug] }, ctx(fs, { nodeExtraArgs: ['--silent'] }));
+  expect(plan.steps[0].args).toEqual(['run', 'test', ...COVERAGE_ARGS, '--silent', '--runTestsByPath', 'app/[slug]/page.test.tsx', 'src/a.test.js']);
+});
+
+test('partial plan with a positional pattern in the script still runs only the given files', async () => {
+  const a = path.join(dir, 'src', 'a.test.js');
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'jest --ci src' } }), [a]: '' });
+  const plan = await jestAdapter.plan(project, { kind: 'partial', paths: [a] }, ctx(fs));
+  // With --runTestsByPath every positional argument is an exact path, so the script's `src` selects nothing more.
+  expect(plan.steps[0].args).toEqual(['run', 'test', '--', ...COVERAGE_ARGS, '--runTestsByPath', 'src/a.test.js']);
+});
+
+test('partial plan for a directory passes its test files; an empty directory has no steps', async () => {
+  const deep = path.join(dir, 'src', 'deep');
+  const { project, fs } = await projectOf({
+    [pkgFile]: pkg({ jest: {} }),
+    [path.join(deep, 'b.test.js')]: '', [path.join(deep, 'x', '__tests__', 'c.js')]: '', [path.join(deep, 'util.js')]: '',
+    [path.join(deep, 'node_modules', 'lib', 'd.test.js')]: '', [path.join(dir, 'docs', 'readme.md')]: '',
+  });
+  const plan = await jestAdapter.plan(project, { kind: 'partial', paths: [deep] }, ctx(fs));
+  expect(plan.steps[0].args).toEqual(['--no-install', 'jest', ...COVERAGE_ARGS, '--runTestsByPath', 'src/deep/b.test.js', 'src/deep/x/__tests__/c.js']);
+
+  const empty = await jestAdapter.plan(project, { kind: 'partial', paths: [path.join(dir, 'docs')] }, ctx(fs));
+  expect(empty.steps).toEqual([]);
+  expect(empty.hint).toBe('No test files were found in the selected folder.');
+});
+
+test('the outer script runs when it forwards arguments; a bare npm redirection carries its env to the target', async () => {
+  const forwarded = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'npm run unit -- --ci', unit: 'jest' } }) });
+  expect((await jestAdapter.plan(forwarded.project, { kind: 'full' }, ctx(forwarded.fs))).steps[0]).toEqual({
+    command: 'npm', args: ['run', 'test', '--', ...COVERAGE_ARGS], cwd: dir, env: { CI: 'true' },
+  });
+  const yarn = await projectOf({
+    [pkgFile]: pkg({ scripts: { test: 'TZ=UTC NODE_ENV=test yarn unit', unit: 'jest' } }), [path.join(dir, 'yarn.lock')]: '',
+  });
+  expect((await jestAdapter.plan(yarn.project, { kind: 'full' }, ctx(yarn.fs))).steps[0]).toEqual({
+    command: 'yarn', args: ['run', 'test', ...COVERAGE_ARGS], cwd: dir, env: { CI: 'true' },
+  });
+  const bare = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'TZ=UTC NODE_ENV=test npm run unit', unit: 'jest' } }) });
+  expect((await jestAdapter.plan(bare.project, { kind: 'full' }, ctx(bare.fs))).steps[0]).toEqual({
+    command: 'npm', args: ['run', 'unit', '--', ...COVERAGE_ARGS], cwd: dir, env: { TZ: 'UTC', NODE_ENV: 'test', CI: 'true' },
+  });
+});
+
+test('a script in watch mode is detected but not used: the local binary runs instead', async () => {
+  for (const test of ['jest --watchAll', 'jest --watch', 'yarn unit --watch']) {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test, unit: 'jest' } }) });
+    expect((await jestAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps[0], test).toMatchObject({
+      command: 'npx', args: ['--no-install', 'jest', ...COVERAGE_ARGS],
+    });
+  }
+});
+
+test('the lockfile search stops at project.meta.workspaceFolder', async () => {
+  const fs = memoryFs({ [pkgFile]: pkg({ jest: {} }), [path.resolve('/w/yarn.lock')]: '' });
+  const project = await jestAdapter.detect(pkgFile, fs);
+  if (project === undefined) throw new Error('not detected');
+  expect((await jestAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps[0].command).toBe('yarn');
+  const bounded = { ...project, meta: { workspaceFolder: dir } };
+  expect((await jestAdapter.plan(bounded, { kind: 'full' }, ctx(fs))).steps[0].command).toBe('npx');
 });
 
 test('isTestFile follows the default Jest patterns including .mjs/.cjs/.mts/.cts', async () => {

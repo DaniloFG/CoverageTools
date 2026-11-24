@@ -47,16 +47,20 @@ test('full run reports add covered and divide covered', async () => {
 
 test('partial run of calc.test.js then other.test.js accumulates to full coverage', async () => {
   real.store.clear();
+  real.output.length = 0;
   await run({ kind: 'partial', paths: [path.join(dir, 'src', 'calc.test.js')] });
   expect(countsOf(ADD_LINES).every(c => c > 0)).toBe(true);
+  // extra/src/calc.test.js calls divide and its path contains src/calc.test.js: it must not have run.
   expect(countsOf(DIVIDE_LINES)).toEqual([0, 0, 0]);
+  expect(real.output.join('')).not.toContain('extra/src/calc.test.js');
 
   await run({ kind: 'partial', paths: [path.join(dir, 'src', 'other.test.js')] });
   expect(countsOf(ADD_LINES).every(c => c > 0)).toBe(true);
   expect(countsOf(DIVIDE_LINES).every(c => c > 0)).toBe(true);
 });
 
-test('nothing is written inside the sample directory', () => {
+test('a run writes nothing inside the sample directory', async () => {
+  await run({ kind: 'full' });
   const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all', '.'], { cwd: dir, encoding: 'utf8' });
   expect(status).toBe('');
 });
