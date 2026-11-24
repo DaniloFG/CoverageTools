@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { formatPercent, keyPath } from '../format';
 import type { Count } from '../model';
 import type { CoverageStore } from '../store';
 
@@ -8,28 +9,32 @@ export interface BusySource {
   onDidChangeBusy(listener: (busy: boolean) => void): { dispose(): void };
 }
 
-/** Percentage rounded down to one decimal, shown without decimals when it is an integer. */
 function percent(c: Count): string {
-  const tenths = Math.floor((c.covered * 1000) / c.total) / 10;
-  return `${Number.isInteger(tenths) ? tenths : tenths.toFixed(1)}%`;
+  return formatPercent(c.covered, c.total);
 }
 
 function projectLabel(key: string): string {
-  const separator = key.indexOf(':');
-  const name = separator < 0 ? key : key.slice(separator + 1);
-  return vscode.workspace.asRelativePath(name, true);
+  return vscode.workspace.asRelativePath(keyPath(key), true);
 }
 
-/** Status bar item with the accumulated line total; clicking it runs Show Coverage. */
+/** Tells when the published coverage settled after a burst of store changes (see `Publisher`). */
+export interface SettleSource {
+  onDidSettle(listener: () => void): { dispose(): void };
+}
+
+/**
+ * Status bar item with the accumulated line total; clicking it runs Show Coverage. It is recomputed
+ * once per settled burst of store changes (the publisher's debounce), never per mutation.
+ */
 export class StatusBar {
   private readonly item: vscode.StatusBarItem;
   private readonly subscriptions: Array<{ dispose(): void }> = [];
 
-  constructor(private readonly store: CoverageStore, private readonly queue?: BusySource) {
+  constructor(private readonly store: CoverageStore, settled: SettleSource, private readonly queue?: BusySource) {
     this.item = vscode.window.createStatusBarItem('coverageTools.status', vscode.StatusBarAlignment.Left);
     this.item.name = 'Coverage Tools';
     this.item.command = 'coverageTools.show';
-    this.subscriptions.push(store.onDidChange(() => this.update()));
+    this.subscriptions.push(settled.onDidSettle(() => this.update()));
     if (queue) this.subscriptions.push(queue.onDidChangeBusy(() => this.update()));
     this.update();
   }

@@ -4,7 +4,8 @@ import {
 
 /** Zero-based position, as in VS Code. */
 export interface Pos { line: number; character: number }
-export interface BranchDetail { executed: number; label: string }
+/** `position` is where the branch starts (its column within the line), when the report has one. */
+export interface BranchDetail { executed: number; label: string; position?: Pos }
 export interface StatementDetail { kind: 'statement'; executed: number; start: Pos; end?: Pos; branches: BranchDetail[] }
 export interface DeclarationDetail { kind: 'declaration'; name: string; executed: number; start: Pos; end?: Pos }
 
@@ -19,8 +20,9 @@ function pos(line: number, col: number): Pos {
  * Converts the compact model of one file into line-by-line detail, without VS Code types.
  *
  * Statements come first, in line order, then declarations in name order. Branches attach to the
- * first statement that starts on their line, labelled `branch 1`, `branch 2`, … in order; a line
- * with branches but no statement gets a whole-line statement whose count is the sum of its branches.
+ * first statement that starts on their line, labelled `branch 1`, `branch 2`, … in order and placed at
+ * their own column; a line with branches but no statement gets a whole-line statement whose count is
+ * the sum of its branches.
  */
 export function toDetails(file: FileCoverageData): Array<StatementDetail | DeclarationDetail> {
   const statements: StatementDetail[] = [];
@@ -43,7 +45,7 @@ export function toDetails(file: FileCoverageData): Array<StatementDetail | Decla
     const branches: BranchDetail[] = [];
     let sum = 0;
     for (; i < b.length && b[i] === line; i += BRANCH_STRIDE) {
-      branches.push({ executed: b[i + 3], label: `branch ${branches.length + 1}` });
+      branches.push({ executed: b[i + 3], label: `branch ${branches.length + 1}`, position: pos(line, b[i + 1]) });
       sum = addCounts(sum, b[i + 3]);
     }
     const owner = firstOnLine.get(line);

@@ -1,6 +1,6 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
 import { _electron, type ElectronApplication, type Page } from 'playwright-core';
 
@@ -64,6 +64,67 @@ const BASE_SETTINGS = {
 
 /** Every session not closed yet, so `closeAll` can clean up after a failed or timed-out test. */
 const sessions = new Set<VSCodeSession>();
+/** Workspace copies made by `copyWorkspace`, removed by `closeAll`. */
+const workspaceCopies = new Set<string>();
+
+/**
+ * Copies a fixture workspace to a fresh temporary directory, so tests can write reports into it.
+ * `closeAll` removes it.
+ */
+export async function copyWorkspace(fixture: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'coverage-tools-ws-'));
+  workspaceCopies.add(dir);
+  await cp(fixture, dir, { recursive: true });
+  return dir;
+}
+
+/** Writes a file, creating its directory. */
+export async function writeReport(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+}
+
+/**
+ * Writes a report and waits until `seen` holds, writing it again every few seconds: right after
+ * startup the extension may not be watching yet, and a missed event is not repeated.
+ */
+export async function writeReportUntil(path: string, content: string, seen: () => Promise<boolean>, attempts = 10): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    await writeReport(path, content);
+    try {
+      await waitFor(seen, 3_000, `the report ${path} to be picked up`);
+      return;
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+    }
+  }
+}
+
+/** An LCOV tracefile with line counts only: `{ 'a.js': [[1, 1], [2, 0]] }`. */
+export function lcov(files: Record<string, ReadonlyArray<readonly [number, number]>>): string {
+  let out = 'TN:\n';
+  for (const [path, lines] of Object.entries(files)) {
+    out += `SF:${path}\n`;
+    for (const [line, count] of lines) out += `DA:${line},${count}\n`;
+    out += `LF:${lines.length}\nLH:${lines.filter(([, c]) => c > 0).length}\nend_of_record\n`;
+  }
+  return out;
+}
+
+/** An Istanbul `coverage-final.json` with one whole-line statement per entry: `{ '/abs/a.js': [[1, 1]] }`. */
+export function istanbul(files: Record<string, ReadonlyArray<readonly [number, number]>>): string {
+  const root: Record<string, unknown> = {};
+  for (const [path, lines] of Object.entries(files)) {
+    const statementMap: Record<string, unknown> = {};
+    const counts: Record<string, number> = {};
+    lines.forEach(([line, count], i) => {
+      statementMap[i] = { start: { line, column: 0 }, end: { line, column: 1 } };
+      counts[i] = count;
+    });
+    root[path] = { path, statementMap, s: counts, fnMap: {}, f: {}, branchMap: {}, b: {} };
+  }
+  return JSON.stringify(root, null, 2);
+}
 
 /** Polls `fn` every 100 ms until it returns a truthy value, and returns that value. */
 export async function waitFor<T>(fn: () => T | Promise<T>, timeoutMs = 30_000, description?: string): Promise<NonNullable<T>> {
@@ -94,10 +155,16 @@ export async function closeAll(context?: TestContextLike): Promise<void> {
   if (context?.task.result?.state === 'fail') {
     const base = context.task.name.replace(/[^\w.-]+/g, '_').slice(0, 120);
     await mkdir(screenshotDir, { recursive: true }).catch(() => {});
-    await Promise.all(open.map((s, i) =>
-      s.page.screenshot({ path: join(screenshotDir, `${base}${i === 0 ? '' : `-${i + 1}`}.png`), timeout: 5_000 }).catch(() => {})));
+    // A session whose launch is still pending has no window yet.
+    await Promise.allSettled(open.map(async (s, i) => {
+      if (s.page) await s.page.screenshot({ path: join(screenshotDir, `${base}${i === 0 ? '' : `-${i + 1}`}.png`), timeout: 5_000 });
+    }));
   }
-  await Promise.all(open.map((s) => s.close()));
+  // Never throws: every session gets closed even when closing another one fails.
+  await Promise.allSettled(open.map((s) => s.close()));
+  const copies = [...workspaceCopies];
+  workspaceCopies.clear();
+  await Promise.allSettled(copies.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })));
 }
 
 let download: Promise<string> | undefined;
@@ -131,6 +198,7 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
     return closing;
   };
   const session: VSCodeSession = {
+    // Assigned once the window is up; closeAll() checks it for sessions still launching.
     page: undefined as unknown as Page,
     runCommand: (title, options) => runPaletteCommand(session.page, title, options),
     coverageViewText: (expected) => readCoverageView(session, expected),
@@ -149,7 +217,8 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
       JSON.stringify({ ...BASE_SETTINGS, ...opts.settings }, null, 2),
     );
 
-    app = await _electron.launch({
+    if (closing) throw new Error('The VS Code session was closed while it was launching');
+    const launched = await _electron.launch({
       executablePath,
       env: opts.env ? { ...process.env, ...opts.env } as Record<string, string> : undefined,
       args: [
@@ -167,6 +236,13 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
         resolve(opts.workspace),
       ],
     });
+    if (closing) {
+      // close() ran while VS Code was starting and found no app to close: close this one now.
+      await closeWithin(launched, CLOSE_TIMEOUT_MS);
+      await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      throw new Error('The VS Code session was closed while it was launching');
+    }
+    app = launched;
     session.page = await app.firstWindow();
     await session.page.waitForSelector('.monaco-workbench .part.statusbar', { timeout: 60_000 });
     await waitForEventuallyPhase(session.page);

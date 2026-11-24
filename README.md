@@ -201,9 +201,9 @@ built to these rules, and each release is checked against them:
 |---------|--------|
 | Design specification | Approved |
 | Implementation plan | Written |
-| Accumulated coverage in the native UI | In progress (publishing done; reports and runs not loaded yet) |
-| Show Coverage and Clear Coverage | Done |
-| Automatic detection of coverage reports | Planned |
+| Accumulated coverage in the native UI | Done (unreleased) |
+| Show Coverage and Clear Coverage | Done (unreleased) |
+| Automatic detection of coverage reports | Done (unreleased) |
 | Run All Coverage | Planned |
 | Run Coverage Here (Explorer right-click) | Planned |
 | .NET support: VSTest | Planned |
@@ -213,7 +213,7 @@ built to these rules, and each release is checked against them:
 | Node support: any other tool, through c8 | Planned |
 | Python support: pytest and unittest | Planned |
 | Custom command per project | Planned |
-| Status bar total | Done |
+| Status bar total | Done (unreleased) |
 | Usage screenshots in this README | Planned |
 
 ## Installation

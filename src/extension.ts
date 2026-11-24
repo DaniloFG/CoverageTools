@@ -1,34 +1,50 @@
-import { readFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import * as vscode from 'vscode';
-import { FileBuilder } from './model';
 import { CoverageStore } from './store';
+import { readSettings } from './vscode/config';
 import { Publisher } from './vscode/publisher';
+import { ReportWatcher } from './vscode/reportWatcher';
 import { StatusBar } from './vscode/statusBar';
+import { ParserClient } from './worker/client';
 
 export interface ExtensionApi {
   store: CoverageStore;
-  /** Settles once the work started by activation is done. */
-  ready: Promise<void>;
 }
 
 export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const store = new CoverageStore();
   const publisher = new Publisher(store);
-  const statusBar = new StatusBar(store);
+  const statusBar = new StatusBar(store, publisher);
+  // The worker starts only when the first report arrives.
+  const parser = new ParserClient(join(context.extensionPath, 'dist', 'worker.js'));
+  // Created on the first message, so that a quiet session has no output channel.
+  let channel: vscode.LogOutputChannel | undefined;
+  const log = (msg: string): void => {
+    channel ??= vscode.window.createOutputChannel('Coverage Tools', { log: true });
+    channel.info(msg);
+  };
+  // Reading static reports runs no code, so it stays on in untrusted workspaces.
+  const watcher = new ReportWatcher({
+    store,
+    parser,
+    settingsOf: readSettings,
+    projects: () => [],
+    isSuppressed: () => false,
+    log,
+  });
   context.subscriptions.push(
+    watcher,
+    parser,
     publisher,
     statusBar,
+    { dispose: () => channel?.dispose() },
     vscode.commands.registerCommand('coverageTools.show', () => showCoverage(store, publisher)),
     vscode.commands.registerCommand('coverageTools.clear', async () => {
       store.clear();
       await publisher.close();
     }),
   );
-
-  const seed = process.env.COVERAGE_TOOLS_TEST_SEED;
-  const ready = seed ? loadTestSeed(seed, store) : Promise.resolve();
-  return { store, ready };
+  return { store };
 }
 
 export function deactivate(): void {}
@@ -45,18 +61,4 @@ async function showCoverage(store: CoverageStore, publisher: Publisher): Promise
   } catch {
     // Older VS Code builds lack the command; the workbench opens the run by itself there.
   }
-}
-
-/**
- * Provisional test hook, removed once report detection exists: loads `[{ path, lines: [[line, count]] }]`
- * from the JSON file named by COVERAGE_TOOLS_TEST_SEED into the store.
- */
-async function loadTestSeed(seedFile: string, store: CoverageStore): Promise<void> {
-  const entries = JSON.parse(await readFile(seedFile, 'utf8')) as Array<{ path: string; lines: Array<[number, number]> }>;
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-  store.replace('seed', entries.map(({ path, lines }) => {
-    const b = new FileBuilder(isAbsolute(path) ? path : join(root, path));
-    for (const [line, count] of lines) b.addLine(line, count);
-    return b.build();
-  }));
 }

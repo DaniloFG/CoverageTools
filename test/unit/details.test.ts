@@ -29,7 +29,10 @@ test('branches attach to the statement that starts on their line', () => {
     { kind: 'statement', executed: 1, start: { line: 4, character: 0 }, branches: [] },
     {
       kind: 'statement', executed: 3, start: { line: 5, character: 0 },
-      branches: [{ executed: 0, label: 'branch 1' }, { executed: 3, label: 'branch 2' }],
+      branches: [
+        { executed: 0, label: 'branch 1', position: { line: 5, character: 0 } },
+        { executed: 3, label: 'branch 2', position: { line: 5, character: 0 } },
+      ],
     },
   ]);
 });
@@ -45,10 +48,27 @@ test('a branch on a line with no statement creates a statement with the summed c
     { kind: 'statement', executed: 1, start: { line: 1, character: 0 }, branches: [] },
     {
       kind: 'statement', executed: 7, start: { line: 3, character: 0 },
-      branches: [{ executed: 2, label: 'branch 1' }, { executed: 5, label: 'branch 2' }],
+      branches: [
+        { executed: 2, label: 'branch 1', position: { line: 3, character: 0 } },
+        { executed: 5, label: 'branch 2', position: { line: 3, character: 0 } },
+      ],
     },
     { kind: 'statement', executed: 0, start: { line: 8, character: 0 }, branches: [] },
-    { kind: 'statement', executed: 0, start: { line: 11, character: 0 }, branches: [{ executed: 0, label: 'branch 1' }] },
+    { kind: 'statement', executed: 0, start: { line: 11, character: 0 }, branches: [{ executed: 0, label: 'branch 1', position: { line: 11, character: 3 } }] },
+  ]);
+});
+
+test('each branch keeps its own column as a zero-based position', () => {
+  const b = new FileBuilder('/w/a.ts');
+  b.addLine(3, 1);
+  b.addBranch(3, 4, 0, 1);
+  b.addBranch(3, 4, 1, 0);
+  b.addBranch(3, 17, 0, 2);
+  const [statement] = toDetails(b.build());
+  expect(statement.kind === 'statement' && statement.branches).toEqual([
+    { executed: 1, label: 'branch 1', position: { line: 2, character: 4 } },
+    { executed: 0, label: 'branch 2', position: { line: 2, character: 4 } },
+    { executed: 2, label: 'branch 3', position: { line: 2, character: 17 } },
   ]);
 });
 

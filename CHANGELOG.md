@@ -19,8 +19,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Planned
 
-- Automatic detection of coverage reports written by runs made outside the
-  extension (terminal, tasks, scripts).
 - `Run All Coverage` command to run every test project in the workspace.
 - `Run Coverage Here` in the Explorer right-click menu for a test project,
   folder, or test file.
@@ -34,8 +32,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Lightweight operation: no startup cost, no idle work, and report parsing
   off the main extension thread.
 - Read-only behaviour in untrusted workspaces.
-- Reading of Cobertura, Istanbul JSON, and LCOV reports, whatever tool wrote
-  them.
 - Custom coverage command per project (`coverageTools.commands`).
 - Usage screenshots in the README, captured from the sample workspace.
 
@@ -43,12 +39,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Implementation of the first release. The design is approved and the
   implementation plan is written.
-- Accumulated coverage for every project in the workspace, shown through VS
-  Code's native Test Coverage UI (per-file percentage, coverage bars,
-  line-by-line highlighting). Publishing works; loading reports and running
-  tests are not wired in yet.
 
 ### Done
 
+- Accumulated coverage for every project in the workspace, shown through VS
+  Code's native Test Coverage UI (per-file percentage, coverage bars,
+  line-by-line highlighting).
+- Automatic detection of coverage reports written by runs made outside the
+  extension (terminal, tasks, scripts).
+- Reading of Cobertura, Istanbul JSON, and LCOV reports, whatever tool wrote
+  them.
 - `Show Coverage` and `Clear Coverage` commands.
 - Status bar item with the accumulated total.

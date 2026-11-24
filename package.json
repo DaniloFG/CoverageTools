@@ -37,7 +37,51 @@
         "title": "Clear Coverage",
         "category": "Coverage Tools"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Coverage Tools",
+      "properties": {
+        "coverageTools.watch.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Detect coverage reports written by runs made outside the extension (terminal, tasks, scripts)."
+        },
+        "coverageTools.watch.globs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "scope": "resource",
+          "default": [
+            "**/TestResults/**/*.cobertura.xml",
+            "**/coverage/coverage-final.json",
+            "**/coverage/lcov.info",
+            "**/coverage/cobertura-coverage.xml",
+            "**/coverage.xml",
+            "**/coverage.lcov",
+            "**/.coverage"
+          ],
+          "description": "Glob patterns, relative to each workspace folder, of the coverage reports to detect."
+        },
+        "coverageTools.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "scope": "resource",
+          "default": [
+            "**/node_modules/**",
+            "**/bin/**",
+            "**/obj/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/__pycache__/**"
+          ],
+          "description": "Glob patterns, relative to each workspace folder, of paths ignored during discovery and watching."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs --production",
