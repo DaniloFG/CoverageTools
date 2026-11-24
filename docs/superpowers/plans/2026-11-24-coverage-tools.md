@@ -1108,3 +1108,45 @@ test('the .vsix contains dist, the bundled c8 and no source or test files', asyn
 - [ ] **Step 3: Verificação completa** — `npm run lint && npm run build && npm run check:size && npm test && npm run test:e2e && npm run test:perf && xvfb-run -a npm run test:ui && npm run package`. Tudo verde, e anotar o tamanho final do `.vsix` e o tempo de ativação medido.
 - [ ] **Step 4: Conferência manual da ativação.** Com o harness, abrir "Developer: Show Running Extensions" e registrar o tempo de ativação mostrado para Coverage Tools; deve estar abaixo de 20 ms.
 - [ ] **Step 5: Commit** — `chore: release 0.1.0`.
+
+### Task 23: Publicação automática do `.vsix` (mesmo esquema do GitTools)
+
+Pedido do usuário depois da aprovação do plano: ao publicar, gerar e entregar o `.vsix` automaticamente, como o workflow `publish-extension.yml` do repositório `DaniloFG/GitTools`. Uma cópia de leitura daquele repositório está em `/home/user/danilofg/gittools` (workflow em `.github/workflows/publish-extension.yml`, script em `scripts/extension-version.mjs`); use-a como referência de estrutura, sem copiar os portões de texto específicos daquele projeto.
+
+**Files:**
+- Create: `.github/workflows/publish-extension.yml`, `scripts/extension-version.mjs`, `scripts/release-notes.mjs`
+- Modify: `package.json` (script `package` grava em `release/` com `--baseContentUrl https://github.com/DaniloFG/CoverageTools/blob/main --baseImagesUrl https://github.com/DaniloFG/CoverageTools/raw/main`), `.gitignore` (`release/`), `.github/workflows/ci.yml` (o job `package` usa o mesmo script e guarda `release/*.vsix`), `README.md` ("Installation": baixar o `.vsix` da página de Releases e instalar com `Extensions: Install from VSIX...`), `CHANGELOG.md`, `test/ui/vsix.ui.test.ts` (caminho do `.vsix`)
+- Test: `test/unit/scripts/extensionVersion.test.ts`, `test/unit/scripts/releaseNotes.test.ts`, `test/unit/scripts/publishWorkflow.test.ts`
+
+**Interfaces:**
+- Produces: `nextExtensionVersion(fileVersion: string, tags?: string[]): string` (em `scripts/extension-version.mjs`; executado direto, imprime a versão a partir do `package.json` da raiz e de `git tag -l 'v*'`); `releaseNotes(changelog: string, version: string, allowNeutral: boolean): string` (em `scripts/release-notes.mjs`; executado como `node scripts/release-notes.mjs <versão> <arquivo de saída> <neutral|strict>`).
+
+- [ ] **Step 1: Testes que falham.**
+
+```ts
+// extensionVersion.test.ts
+test.each([
+  ['0.1.0', [], '0.1.0'],                         // sem tag: vale a do arquivo
+  ['0.2.0', ['v0.1.3'], '0.2.0'],                 // arquivo acima da última tag: subida manual
+  ['0.1.0', ['v0.1.0'], '0.1.1'],                 // igual: próximo patch
+  ['0.1.0', ['v0.1.9', 'v0.1.10'], '0.1.11'],     // comparação numérica, não de texto
+  ['0.1.0', ['v0.1.2', 'nightly', 'v1'], '0.1.3'],// tags fora do formato são ignoradas
+])('nextExtensionVersion(%s, %j) is %s', (file, tags, expected) => expect(nextExtensionVersion(file, tags)).toBe(expected));
+test('an invalid file version throws', () => expect(() => nextExtensionVersion('1.0')).toThrow());
+
+// releaseNotes.test.ts
+test('uses the section of the version when the changelog has one', () => { /* corpo de "## [0.1.0] - …" até o próximo "## [" */ });
+test('otherwise uses the Done list under Unreleased', () => {});
+test('with nothing to say: neutral mode returns "Maintenance release."; strict mode throws', () => {});
+
+// publishWorkflow.test.ts — lê o YAML como texto e como objeto (python3 -c "import yaml, json" via execFileSync)
+test('triggers on push to main, on v* tags and manually with a version input', () => {});
+test('top-level permissions are read-only and only the publish job can write contents', () => {});
+test('no ${{ github.event.* }} expression appears inside a run: block', () => { /* entradas do evento só por env */ });
+test('the release step has no condition: the .vsix is always attached to a GitHub release', () => {});
+```
+
+- [ ] **Step 2: Rodar e ver falhar.**
+- [ ] **Step 3: Implementar.** O workflow segue a ordem do GitTools: `checkout` com `fetch-depth: 0`; Node 22 com cache npm; `npm ci`; `lint`, `build`, `check:size`, `npm test`; definir a versão (entrada manual, ou a da tag, ou `scripts/extension-version.mjs`), validar `x.y.z` e gravá-la no `package.json`; gerar as notas com `scripts/release-notes.mjs` (modo `neutral` só em push na branch); `npm run package`; publicar no Marketplace se existir o segredo `VSCE_PAT` (versão já publicada vira aviso, não erro); publicar no Open VSX se existir `OVSX_PAT`; anexar `release/*.vsix` a um release `v<versão>` com `softprops/action-gh-release@v2` e `body_path` das notas; guardar o `.vsix` como artifact `coverage-tools-vsix`. `concurrency: publish-extension`, sem cancelamento. Filtro de caminhos no push: `src/**`, `scripts/**`, `package.json`, `package-lock.json`, `esbuild.mjs`, `tsconfig.json`, `.vscodeignore`, `README.md`, `CHANGELOG.md`, `docs/images/**`. **Diferença deliberada em relação ao GitTools:** lá o release só é criado em tag ou quando o Marketplace publicou; aqui o release com o `.vsix` é criado sempre, porque o pedido é entregar a extensão a cada publicação mesmo sem Marketplace configurado.
+- [ ] **Step 4: Rodar e ver passar; simular o passo de versão** — executar localmente o trecho de shell do passo "definir a versão" com `INPUT_VERSION` vazio, com `0.3.0` e com `abc` (este deve falhar), e `npm run package` deve produzir `release/coverage-tools-<versão>.vsix`.
+- [ ] **Step 5: Commit** — `ci: publish the .vsix automatically on release`. Acrescentar ao `CHANGELOG.md` a linha sobre releases automáticos.
