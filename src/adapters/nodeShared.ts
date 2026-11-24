@@ -95,7 +95,8 @@ function toolName(word: string): string {
 }
 
 type Parsed =
-  | { kind: 'tool'; line: string }
+  /** `line`: the tool name and its arguments; `bin`: the command word as written. */
+  | { kind: 'tool'; line: string; bin: string }
   /**
    * Another script of the package. `forwards`: arguments appended to this line reach the target script
    * (yarn and pnpm always forward them; npm only after `--`). `args`: the arguments the line passes on.
@@ -158,7 +159,7 @@ function parseLine(line: string, scripts: Record<string, string>): Parsed | unde
         i += NODE_OPTIONS_WITH_VALUE.has(option) ? 2 : 1;
       }
     } else {
-      return { kind: 'tool', line: [toolName(w), ...words.slice(i + 1)].join(' ') };
+      return { kind: 'tool', line: [toolName(w), ...words.slice(i + 1)].join(' '), bin: w };
     }
   }
 }
@@ -197,6 +198,50 @@ export function scriptTailCalls(pkg: PackageJson, tool: RegExp, watch?: RegExp):
   if (inner?.kind !== 'tool') return undefined;
   if (!usable([inner.line, ...outer.args].join(' '))) return undefined;
   return outer.forwards ? { script: 'test', env: {} } : { script: outer.name, env: outer.env };
+}
+
+/** Splits a script line into its commands at `&&`, `||`, `;`, `|`, `&`, `>` and `<` outside quotes. */
+function splitCommands(line: string): string[] {
+  const commands: string[] = [];
+  let current = '';
+  let quote: string | undefined;
+  for (const c of line) {
+    if (quote !== undefined) {
+      if (c === quote) quote = undefined;
+      current += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      current += c;
+    } else if (';|&<>'.includes(c)) {
+      commands.push(current);
+      current = '';
+    } else {
+      current += c;
+    }
+  }
+  commands.push(current);
+  return commands.filter(command => command.trim() !== '');
+}
+
+/**
+ * Whether any command of the `test` script, or of the script it redirects to (one level), runs one
+ * of `tools` (e.g. nyc or c8). A command is matched by its tool name after env-var prefixes and
+ * wrappers are removed; a path only counts when it points into node_modules, so `my-nyc-thing` or
+ * `node scripts/c8.js` do not.
+ */
+export function scriptInvokes(pkg: PackageJson, tools: readonly string[]): boolean {
+  const scripts = pkg.scripts ?? {};
+  const commandsOf = (name: string): Parsed[] => {
+    const line = Object.hasOwn(scripts, name) ? scripts[name] : undefined;
+    if (typeof line !== 'string') return [];
+    return splitCommands(line).flatMap(command => parseLine(command, scripts) ?? []);
+  };
+  const runsTool = (parsed: Parsed): boolean => {
+    if (parsed.kind !== 'tool') return false;
+    const name = toolName(parsed.bin);
+    return tools.includes(name) && (parsed.bin === name || parsed.bin.split(/[\\/]/).includes('node_modules'));
+  };
+  return commandsOf('test').some(parsed => runsTool(parsed) || (parsed.kind === 'script' && commandsOf(parsed.name).some(runsTool)));
 }
 
 /** The workspace folder discovery recorded on the project (`meta.workspaceFolder`), if any. */

@@ -211,7 +211,7 @@ e o lê ao terminar.
 | `dotnet-mtp` | `dotnet run --project "<csproj>" -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml"` | conforme o framework (abaixo) |
 | `jest` | `<jest> --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | `--runTestsByPath` seguido dos arquivos de teste selecionados (uma pasta vira os arquivos de teste dentro dela), caminhos relativos |
 | `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>"`, com `CI=true` | os arquivos de teste selecionados, caminhos relativos, precedidos de `--exclude=<arquivo>` para cada outro arquivo de teste que o filtro também pegaria |
-| `node-generic` | `c8 --reporter=json --reports-dir="<tmp>" <comando de teste>`, usando o `c8` embutido na extensão | — |
+| `node-generic` | `node <c8> --reporter=json --reports-dir="<tmp>" --temp-directory="<tmp>/v8" <comando de teste>`, usando o `c8` embutido na extensão | — |
 | `python` | conforme o que existe no ambiente (abaixo) | caminho relativo do arquivo/pasta |
 
 **Node**
@@ -253,12 +253,18 @@ e o lê ao terminar.
   projeto. Ele é distribuído dentro do `.vsix`, chamado com o `node` do
   usuário e só roda como processo separado, durante uma execução; não pesa na
   extensão em repouso. A versão embutida deve aceitar Node 18 ou superior; com
-  um Node mais antigo, a execução falha com uma mensagem dizendo isso. O comando de teste é `<pm> test` ou, sem script e com
-  `.mocharc.*`, o executável local do Mocha. Exceção: se o script `test` já
-  chama `nyc` ou `c8`, a extensão não embrulha de novo; roda o script como
-  está e depois procura um relatório reconhecido dentro do projeto (os mesmos
-  padrões da detecção externa). Se não encontrar, avisa que o script precisa
-  gravar um relatório `lcov` ou `json`.
+  um Node mais antigo, a execução falha com uma mensagem dizendo isso. O comando de teste é `<pm> run test` ou, sem script e com
+  `.mocharc.*`, o executável local do Mocha (o script `test` padrão do
+  `npm init`, que só imprime um erro, não conta). Os dados brutos do V8 vão
+  para `<tmp>/v8`, separados do relatório. Não é preciso `--all`, `--src` nem
+  `--exclude-after-remap`: o `c8` já relata só os arquivos carregados, sem
+  testes nem `node_modules` (padrões do `@istanbuljs/schema`), e o projeto
+  em TypeScript via `tsx` sai com o arquivo `.ts` (seção 6). Exceção: se o
+  script `test` (ou o script para o qual ele redireciona) já chama `nyc` ou
+  `c8` em algum de seus comandos, a extensão não embrulha de novo; roda o
+  script como está e depois procura um relatório reconhecido dentro do
+  projeto (os mesmos padrões da detecção externa). Se não encontrar, avisa
+  que o script precisa gravar um relatório `lcov` ou `json`.
 
 **.NET**
 
@@ -609,6 +615,36 @@ confirmadas em 2026-11-24; seção 5.3). E o adaptador `node-generic` depende de
 medir corretamente projetos que transpilam em tempo de execução (ts-node,
 tsx, Babel). Deve ser validado com projetos de exemplo reais (Mocha em
 JavaScript, Mocha em TypeScript e `node --test`).
+
+*Validado em 2026-11-24 (c8 10.1.3, v8-to-istanbul 9.3.0, tsx 4.21.0,
+Mocha 11.7.5, Node 22):* Mocha em JavaScript e `node --test` saem corretos.
+Em Mocha com TypeScript via `tsx` (script `mocha --import=tsx`; com espaço,
+`--import tsx`, o Mocha 11 lê `tsx` como caminho e falha), o relatório traz o
+arquivo `.ts`, não o código gerado, e a cobertura por linha do corpo das
+funções está nas linhas certas. **Limitação registrada:** o `tsx` compila
+para CommonJS (observado também com `"type": "module"` no projeto), e as
+funções auxiliares que o esbuild acrescenta
+(`__export`, `__toCommonJS`, `__copyProps`, `__name` e os getters das
+exportações) não têm mapeamento de origem; o v8-to-istanbul as joga na linha
+1, coluna 0. Resultado: declarações a mais na linha 1 (inclusive um
+`divide` não coberto, o getter da exportação) e ramos a mais nessa linha, o
+que altera os totais de declarações e ramos. Além disso, a linha
+`export function f(...) {` de uma função não executada aparece coberta,
+porque a faixa do V8 para a função começa depois de `export `. Nenhuma opção
+do `c8` 10 resolve (`--exclude-after-remap` só filtra arquivos inteiros;
+`--experimental-monocart` exige um pacote que a extensão não embute). Quem
+precisa de números exatos usa o comando personalizado (seção 5.7) com a
+ferramenta de cobertura do próprio executor.
+
+*Achado da mesma validação:* o caminho relativo de um relatório LCOV
+(`SF:src/calc.js`, como grava o `nyc`) é resolvido contra a pasta do
+relatório e depois contra cada raiz do workspace, nessa ordem; para um
+projeto abaixo da raiz isso pode não achar o arquivo ou achar o de outro
+projeto. Fica para a resolução de caminhos dos parsers (seção 5.3, B).
+
+*Achado na validação do Vitest (4.0.18):* sem arquivo de configuração no
+projeto, o Vitest procura um `vitest.config.*` nas pastas acima e pode usar o
+de outro projeto; os exemplos têm o seu próprio.
 
 Validado em VS Code 1.147.0 em 2026-11-24: execução sem itens de teste é exibida.
 

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { localBin, NODE_TEST_FILE, packageManagerOf, scriptCommand, scriptTailCalls, selectedTestFiles, workspaceFolderOf } from '../../../src/adapters/nodeShared';
+import { localBin, NODE_TEST_FILE, packageManagerOf, scriptCommand, scriptInvokes, scriptTailCalls, selectedTestFiles, workspaceFolderOf } from '../../../src/adapters/nodeShared';
 import type { Project } from '../../../src/adapters/types';
 import { DEFAULT_SETTINGS } from '../../../src/settings';
 import { memoryFs } from './memoryFs';
@@ -163,4 +163,29 @@ test('selectedTestFiles keeps test files, expands directories to their test file
   ]);
   expect(await select([f('empty')])).toEqual([]);
   expect(await select([f('src/a.js')])).toEqual([]);
+});
+
+test.each([
+  [{ test: 'nyc mocha' }, true],
+  [{ test: 'nyc --reporter=lcov mocha' }, true],
+  [{ test: 'c8 node --test' }, true],
+  [{ test: 'FOO=1 cross-env BAR=2 nyc mocha' }, true],
+  [{ test: 'npx --no-install c8 mocha' }, true],
+  [{ test: 'yarn nyc mocha' }, true],
+  [{ test: 'node_modules/.bin/nyc mocha' }, true],
+  [{ test: 'node ./node_modules/c8/bin/c8.js mocha' }, true],
+  [{ test: 'mocha && nyc report' }, true],
+  [{ test: 'tsc ; c8 mocha | tee out' }, true],
+  [{ test: 'npm run cov', cov: 'nyc mocha' }, true],
+  [{ test: 'yarn cov --bail', cov: 'eslint . && c8 mocha' }, true],
+  [{ test: 'nyc "mocha && echo done"' }, true],
+  [{ test: 'mocha' }, false],
+  [{ test: 'my-nyc-thing mocha' }, false],
+  [{ test: 'mocha test/nyc' }, false],
+  [{ test: 'node scripts/c8.js' }, false],
+  [{ test: 'echo "nyc && c8"' }, false],
+  [{ test: 'npm run a', a: 'npm run b', b: 'nyc mocha' }, false],
+  [{}, false],
+])('scriptInvokes(%j, nyc|c8) is %s', (scripts, expected) => {
+  expect(scriptInvokes({ scripts }, ['nyc', 'c8'])).toBe(expected);
 });
