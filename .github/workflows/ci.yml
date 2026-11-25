@@ -27,7 +27,15 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
       - run: npm ci
+      # The UI tests run the tools of these samples (Jest, pytest, .NET with coverlet).
+      - run: node scripts/setup-samples.mjs node-jest python-pytest dotnet-vstest-coverlet
       - uses: actions/cache@v4
         with:
           path: .vscode-test
