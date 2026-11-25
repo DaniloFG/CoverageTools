@@ -140,14 +140,18 @@ export async function readProjectFacts(csproj: string, fs: FsReader, cache?: Fil
     runner?.toLowerCase() === 'microsoft.testing.platform';
 
   const frameworks = properties.get('targetframeworks') ?? properties.get('targetframework') ?? '';
-  const declaresTest = packages.has('microsoft.net.test.sdk') || isTrue('istestproject') || usesMSTestSdk || packages.has('tunit');
+  const framework = frameworkOf(packages, usesMSTestSdk);
+  // A test framework on Microsoft.Testing.Platform needs no Microsoft.NET.Test.Sdk reference (xunit.v3,
+  // NUnit with EnableNUnitRunner); MSTest's brings it only transitively, which a text reading cannot see.
+  const declaresTest = packages.has('microsoft.net.test.sdk') || isTrue('istestproject') || usesMSTestSdk || packages.has('tunit') ||
+    (usesMtp && framework !== undefined);
   return {
     isTest: valueOf('istestproject') !== 'false' && declaresTest,
     usesMtp,
     packages,
     sdk: sdkNames[0] ?? '',
     targetFrameworks: frameworks.split(';').map(f => f.trim()).filter(f => f !== '' && !f.includes('$(')),
-    framework: frameworkOf(packages, usesMSTestSdk),
+    framework,
   };
 }
 
@@ -393,6 +397,21 @@ export function testTypesIn(source: string): TestType[] {
 /** The qualified names of the test classes declared in a C# source; see `testTypesIn`. */
 export function testClassesIn(source: string): string[] {
   return testTypesIn(source).map(t => t.name);
+}
+
+/** The hint of a partial run whose files declare no test class. */
+export const NO_TEST_CLASSES_HINT = 'No test classes were found in the selected files, so there is nothing to run.';
+
+const BUILD_OUTPUT = new Set(['bin', 'obj']);
+
+/** Whether `file` is a `.cs` file inside `projectDir`, outside `bin/` and `obj/`, that applies test attributes. */
+export async function isTestSourceFile(projectDir: string, file: string, fs: FsReader): Promise<boolean> {
+  if (!file.toLowerCase().endsWith('.cs')) return false;
+  const rel = path.relative(projectDir, file);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  if (rel.split(/[\\/]/).slice(0, -1).some(s => BUILD_OUTPUT.has(s.toLowerCase()))) return false;
+  const text = await fs.readText(file);
+  return text !== undefined && hasTestAttributes(text);
 }
 
 /** The test classes of the `.cs` files and of the `.cs` files under the folders of a partial target, each once. */

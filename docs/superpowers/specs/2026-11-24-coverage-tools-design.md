@@ -163,7 +163,7 @@ em convenções de um time.
 | Adaptador | Um projeto é… | Execução parcial (arquivo/pasta)? |
 |-----------|---------------|-----------------------------------|
 | `dotnet-vstest` | um `.csproj` de testes sobre VSTest: referencia `Microsoft.NET.Test.Sdk` ou declara `<IsTestProject>true</IsTestProject>`, e não se enquadra na linha de baixo | sim |
-| `dotnet-mtp` | um `.csproj` de testes sobre Microsoft.Testing.Platform: SDK `MSTest.Sdk`, `<EnableMSTestRunner>`, `<EnableNUnitRunner>`, `<UseMicrosoftTestingPlatformRunner>`, `<TestingPlatformDotnetTestSupport>`, referência a `TUnit`, ou `global.json` selecionando esse executor | depende do framework (seção 5.3) |
+| `dotnet-mtp` | um `.csproj` de testes sobre Microsoft.Testing.Platform: SDK `MSTest.Sdk`, `<EnableMSTestRunner>`, `<EnableNUnitRunner>`, `<UseMicrosoftTestingPlatformRunner>`, `<TestingPlatformDotnetTestSupport>`, referência a `TUnit`, ou `global.json` selecionando esse executor; e, salvo `MSTest.Sdk` e `TUnit`, referência a um framework de testes reconhecido (MSTest, NUnit, xUnit) ou ao `Microsoft.NET.Test.Sdk`. `<IsTestProject>false</IsTestProject>` exclui o projeto | depende do framework (seção 5.3) |
 | `jest` | um diretório com `package.json` e Jest configurado: chave `jest`, arquivo `jest.config.*`, ou script `test` que chama `jest` ou `react-scripts test` | sim |
 | `vitest` | um diretório com `package.json` e Vitest configurado: arquivo `vitest.config.*`, bloco `test` em `vite.config.*`, ou script `test` que chama `vitest` | sim |
 | `node-generic` | qualquer outro diretório com `package.json` que tenha um script `test` real ou um arquivo `.mocharc.*` (Mocha, AVA, `node --test`, Jasmine, tap etc.) | não |
@@ -216,7 +216,7 @@ e o lê ao terminar.
 | Adaptador | Comando (execução completa) | Filtro na execução parcial |
 |-----------|-----------------------------|----------------------------|
 | `dotnet-vstest` | `dotnet test "<csproj>" <coleta> --results-directory "<tmp>"` | `--filter` com as classes de teste do arquivo/pasta (`FullyQualifiedName~Namespace.Classe.`, com ponto final, unidas por `\|`; classe aninhada como `Namespace.Externa+Interna.`) |
-| `dotnet-mtp` | `dotnet run --project "<csproj>" -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml"` | conforme o framework (abaixo) |
+| `dotnet-mtp` | `dotnet run --project "<csproj>" -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml" --results-directory "<tmp>"` | conforme o framework (abaixo) |
 | `jest` | `<jest> --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | `--runTestsByPath` seguido dos arquivos de teste selecionados (uma pasta vira os arquivos de teste dentro dela), caminhos relativos |
 | `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>"`, com `CI=true` | os arquivos de teste selecionados, caminhos relativos, precedidos de `--exclude=<arquivo>` para cada outro arquivo de teste que o filtro também pegaria |
 | `node-generic` | `node <c8> --reporter=json --reports-dir="<tmp>" --temp-directory="<tmp>/v8" <comando de teste>`, usando o `c8` embutido na extensão | — |
@@ -317,19 +317,48 @@ e o lê ao terminar.
   os seleciona.
 - **Microsoft.Testing.Platform.** O projeto de testes é um executável, então
   `dotnet run` funciona igual em qualquer versão do SDK e modo de
-  `dotnet test`. As opções `--coverage*` vêm da extensão de cobertura da
-  plataforma (`Microsoft.Testing.Extensions.CodeCoverage`), que já vem no
-  `MSTest.Sdk` e precisa ser referenciada nos demais frameworks; sem ela, a
-  execução falha com uma dica dizendo qual pacote falta. Em projetos com mais
-  de um framework de destino, usa-se o primeiro.
+  `dotnet test` (o `dotnet run` compila antes; a saída do build fica em
+  `bin/` e `obj/`). As opções `--coverage*` vêm da extensão de cobertura da
+  plataforma (`Microsoft.Testing.Extensions.CodeCoverage`): no `MSTest.Sdk`
+  ela vem pelo perfil padrão de extensões (propriedade
+  `EnableMicrosoftTestingExtensionsCodeCoverage`), o pacote `TUnit` já a traz
+  como dependência, e nos demais frameworks ela precisa ser referenciada; sem
+  ela a aplicação recusa `--coverage` ("Option '--coverage' is provided by
+  the 'Microsoft.Testing.Extensions.CodeCoverage' extension"), sai com código
+  5 sem relatório, e a execução termina com uma dica dizendo qual pacote
+  falta. Em projetos com mais de um framework de destino, acrescenta-se
+  `--framework <primeiro>` antes do `--`. `coverageTools.dotnet.extraArgs`
+  vai por último, depois do `--`, ou seja, para a aplicação de testes.
+- **Confirmado com execuções reais** (SDK 8.0.134, Linux, 2026-11-25;
+  MSTest.Sdk 4.5.3, NUnit 4.6.1 com NUnit3TestAdapter 6.3.1 e
+  `EnableNUnitRunner`, xunit.v3 4.0.3 com `UseMicrosoftTestingPlatformRunner`,
+  TUnit 1.87.12; extensão de cobertura 18.12.0), sem shell e cada argumento
+  como um elemento do argv, tudo depois do `--` chega inalterado à aplicação:
+  `--coverage-output` aceita caminho absoluto (inclusive com espaços) e é
+  um arquivo; um nome sem diretório seria gravado dentro de
+  `--results-directory`. Sem `--results-directory`, a plataforma cria
+  `bin/<config>/<tfm>/TestResults/` dentro do projeto (e o TUnit grava ali
+  também um relatório HTML e um JSON), por isso o comando aponta
+  `--results-directory` para `<tmp>`; assim nada é criado dentro do projeto.
+  O relatório fica em `<tmp>/coverage.cobertura.xml`, com caminhos absolutos,
+  começa com BOM e mede só os assemblies de produção (não o de teste). Uma
+  execução em que nenhum teste roda sai com código 8 e não grava relatório.
 - **Execução parcial no Microsoft.Testing.Platform** depende do framework de
-  testes, reconhecido pelas referências do projeto: MSTest e NUnit,
-  `--filter "FullyQualifiedName~Namespace.Classe"`; xUnit v3,
-  `--filter-class Namespace.Classe`; TUnit,
-  `--treenode-filter "/*/Namespace/Classe/*"`. Framework não reconhecido
-  aceita só execução completa. Cada sintaxe só entra na versão final depois
-  de confirmada por um teste real no GitHub Actions; a que não for confirmada
-  sai como "só execução completa".
+  testes, reconhecido pelas referências do projeto, com as classes do
+  arquivo/pasta (classe aninhada como `Externa+Interna`; nomes Unicode,
+  testes parametrizados e classes aninhadas confirmados nos quatro):
+  - MSTest e NUnit: `--filter` com a mesma expressão do VSTest,
+    `FullyQualifiedName~Namespace.Classe.` (com ponto final) unidas por `|`;
+  - xUnit v3: um `--filter-class Namespace.Classe` por classe (nome exato,
+    sem casar prefixo; várias ocorrências valem como "ou");
+  - TUnit: `--treenode-filter /*/Namespace/Classe/*`; várias classes viram
+    `/*/Namespace/(A|B)/*`. O filtro não aceita "ou" entre caminhos inteiros,
+    só dentro de um segmento, então classes de namespaces diferentes viram
+    `/*/(N1|N2)/(A|B)/*`, que também pega `N1.B` e `N2.A` se existirem; e
+    uma classe no namespace global usa `*` como namespace.
+
+  Framework não reconhecido (inclusive xUnit v2 sobre a plataforma) aceita
+  só execução completa.
 
 **Python**
 
@@ -501,7 +530,7 @@ não aparece.
 | `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/__pycache__/**` | Ignorado na descoberta e na observação |
 | `coverageTools.nestedProjects` | `inner` | Em projetos aninhados, rodar os de dentro (`inner`) ou o de fora (`outer`) |
 | `coverageTools.dotnet.collector` | `""` (automático) | Força o valor de `--collect` no VSTest |
-| `coverageTools.dotnet.extraArgs` | `[]` | Argumentos adicionais para `dotnet test` |
+| `coverageTools.dotnet.extraArgs` | `[]` | Argumentos adicionais para `dotnet test` (VSTest) ou para a aplicação de testes (Microsoft.Testing.Platform) |
 | `coverageTools.node.extraArgs` | `[]` | Argumentos adicionais para o comando de testes Node |
 | `coverageTools.python.interpreter` | `""` (automático) | Interpretador Python a usar |
 | `coverageTools.python.extraArgs` | `[]` | Argumentos adicionais para o executor de testes Python |
@@ -627,11 +656,10 @@ sem itens de teste, só com cobertura, é exibida normalmente. A API não
 proíbe, mas isso precisa ser a primeira coisa validada. Plano B, se for
 necessário: registrar um item de teste por projeto e incluí-lo na execução.
 
-**Outros riscos, a validar com execuções reais:** as linhas de comando do
-adaptador `dotnet-mtp` foram escritas sem poder rodar .NET no ambiente de
-desenvolvimento e precisam ser confirmadas no GitHub Actions antes de serem
-dadas como prontas (as do VSTest, inclusive o coletor da Microsoft, foram
-confirmadas em 2026-11-24; seção 5.3). E o adaptador `node-generic` depende de o `c8` embutido
+**Outros riscos, a validar com execuções reais:** as linhas de comando dos
+adaptadores .NET foram confirmadas com execuções reais (VSTest em
+2026-11-24, Microsoft.Testing.Platform em 2026-11-25; seção 5.3). O
+adaptador `node-generic` depende de o `c8` embutido
 medir corretamente projetos que transpilam em tempo de execução (ts-node,
 tsx, Babel). Deve ser validado com projetos de exemplo reais (Mocha em
 JavaScript, Mocha em TypeScript e `node --test`).

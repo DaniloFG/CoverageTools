@@ -220,6 +220,14 @@ test('TUnit and IsTestProject make a test project', async () => {
   expect((await facts({ [csproj]: project('<ItemGroup><PackageReference Include="xunit" /></ItemGroup>') })).isTest).toBe(false);
 });
 
+test('an MTP project with a recognised test framework is a test project without Microsoft.NET.Test.Sdk', async () => {
+  const mtp = (refs: string) => project(`<PropertyGroup><UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner></PropertyGroup><ItemGroup>${refs}</ItemGroup>`);
+  expect((await facts({ [csproj]: mtp('<PackageReference Include="xunit.v3" />') })).isTest).toBe(true);
+  expect((await facts({ [csproj]: mtp('') })).isTest).toBe(false);
+  const off = project('<PropertyGroup><IsTestProject>false</IsTestProject><EnableNUnitRunner>true</EnableNUnitRunner></PropertyGroup><ItemGroup><PackageReference Include="NUnit" /></ItemGroup>');
+  expect((await facts({ [csproj]: off })).isTest).toBe(false);
+});
+
 test('testClassesIn handles file-scoped and block namespaces and nested namespaces', () => {
   expect(testClassesIn('namespace A.B;\npublic class CalcTests { [Fact] public void T() {} }')).toEqual(['A.B.CalcTests']);
   expect(testClassesIn(`

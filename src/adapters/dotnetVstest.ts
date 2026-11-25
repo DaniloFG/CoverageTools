@@ -1,21 +1,10 @@
 import path from 'node:path';
-import { fullyQualifiedNameFilter, hasTestAttributes, readProjectFacts, testTypesOf, type ProjectFacts } from './dotnetShared';
+import {
+  fullyQualifiedNameFilter, isTestSourceFile, NO_TEST_CLASSES_HINT, readProjectFacts, testTypesOf, type ProjectFacts,
+} from './dotnetShared';
 import type { Adapter, FsReader, PlanContext, Project, RunPlan, RunTarget } from './types';
 
 const HINT = 'No coverage report was produced. Check that the test project builds and that its tests run with "dotnet test".';
-const NO_TEST_CLASSES_HINT = 'No test classes were found in the selected files, so there is nothing to run.';
-const BUILD_OUTPUT = new Set(['bin', 'obj']);
-
-function isCsFile(p: string): boolean {
-  return p.toLowerCase().endsWith('.cs');
-}
-
-/** Path segments of `p` relative to `dir`, or undefined when `p` is not inside `dir`. */
-function segmentsInside(dir: string, p: string): string[] | undefined {
-  const rel = path.relative(dir, p);
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
-  return rel.split(/[\\/]/);
-}
 
 /**
  * The `dotnet test` arguments that make the project write a Cobertura report into `tmpDir`: the
@@ -55,11 +44,7 @@ export const dotnetVstestAdapter: Adapter = {
   },
 
   async isTestFile(project: Project, file: string, fs: FsReader): Promise<boolean> {
-    if (!isCsFile(file)) return false;
-    const segments = segmentsInside(project.dir, file);
-    if (segments === undefined || segments.slice(0, -1).some(s => BUILD_OUTPUT.has(s.toLowerCase()))) return false;
-    const text = await fs.readText(file);
-    return text !== undefined && hasTestAttributes(text);
+    return isTestSourceFile(project.dir, file, fs);
   },
 
   async plan(project: Project, target: RunTarget, ctx: PlanContext): Promise<RunPlan> {
