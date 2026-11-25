@@ -140,7 +140,7 @@ async function showCoverage(store: CoverageStore, publisher: Publisher): Promise
     void vscode.window.showInformationMessage('Coverage Tools: there is no coverage to show yet.');
     return;
   }
-  publisher.publishNow();
+  await publisher.publishNow();
   // The workbench does not open coverage for a run that ends early in its startup; open it explicitly.
   try {
     await vscode.commands.executeCommand('testing.openCoverage');

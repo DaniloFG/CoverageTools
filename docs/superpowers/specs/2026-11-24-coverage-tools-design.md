@@ -680,9 +680,14 @@ ajustado em silêncio.
 - A cada mudança no `store` (com debounce), o `publisher` cria um `TestRun`
   com esse perfil, chama `addCoverage` para cada arquivo do acumulado e
   encerra a execução.
-- Cada `FileCoverage` publicado carrega o detalhe daquele instante (subclasse
-  de `FileCoverage`), de modo que execuções antigas no histórico continuam
-  mostrando o que valia quando foram publicadas.
+- Cada `FileCoverage` publicado leva só o `uri`, as três contagens e o
+  caminho do arquivo, sem dados de cobertura; `loadDetailedCoverage` busca o
+  detalhe no `store` atual quando o VS Code pede (lista vazia se o arquivo já
+  saiu do acumulado). Por isso uma execução antiga aberta no histórico de
+  resultados mostra o detalhe de linhas atual, não o daquele instante. Motivo:
+  o histórico do VS Code guarda os `FileCoverage` de cada execução, e dados
+  antigos presos ali estouravam a meta de memória; leveza vem antes de
+  detalhe histórico, que ninguém pediu.
 - O controlador não registra itens de teste, para não duplicar o Test
   Explorer nem ser disparado pelo "Run All with Coverage" nativo.
 

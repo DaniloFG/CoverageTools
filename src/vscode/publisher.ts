@@ -1,18 +1,19 @@
 import * as vscode from 'vscode';
 import { toDetails, type DeclarationDetail, type Pos, type StatementDetail } from '../details';
-import { unionFiles } from '../merge';
-import type { FileCoverageData, FileSummary } from '../model';
-import type { CoverageStore } from '../store';
+import { DEFAULT_SLICES, unionFiles, type SliceOptions } from '../merge';
+import type { FileSummary } from '../model';
+import type { CoverageStore, MergedEntry } from '../store';
 
 /** Quiet time after the last store change before the accumulated set is republished. */
 const PUBLISH_DEBOUNCE_MS = 150;
 
 /**
- * A published file that keeps the records it was published with, so that a run kept in VS Code's
- * history still shows what was true when it was published.
+ * A published file: its uri, its three counts and its path, and no coverage data. VS Code keeps the
+ * files of every run in its history, so a file that held its records would keep superseded data
+ * alive; the line detail is read from the store when VS Code asks for it (see `loadDetailedCoverage`).
  */
 class AccumulatedFileCoverage extends vscode.FileCoverage {
-  constructor(uri: vscode.Uri, summary: FileSummary, readonly parts: readonly FileCoverageData[]) {
+  constructor(uri: vscode.Uri, summary: FileSummary, readonly path: string) {
     super(
       uri,
       count(summary.statements),
@@ -20,13 +21,17 @@ class AccumulatedFileCoverage extends vscode.FileCoverage {
       summary.declarations.total > 0 ? count(summary.declarations) : undefined,
     );
   }
+
+  /** Whether this file shows `summary`'s counts. */
+  shows(summary: FileSummary): boolean {
+    return same(this.statementCoverage, summary.statements)
+      && same(this.branchCoverage, summary.branches)
+      && same(this.declarationCoverage, summary.declarations);
+  }
 }
 
-/** Whether two part lists hold the same objects (the store's per-file data is immutable). */
-function sameParts(a: readonly FileCoverageData[], b: readonly FileCoverageData[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
+function same(published: vscode.TestCoverageCount | undefined, c: { covered: number; total: number }): boolean {
+  return published === undefined ? c.total === 0 : published.covered === c.covered && published.total === c.total;
 }
 
 function count(c: { covered: number; total: number }): vscode.TestCoverageCount {
@@ -53,7 +58,9 @@ function toVSCode(detail: StatementDetail | DeclarationDetail): vscode.FileCover
 
 /**
  * Publishes the accumulated coverage through the native Testing API: one coverage-only test run
- * (no test items) per change, with line detail loaded on demand.
+ * (no test items) per change, with line detail loaded on demand from the current store (so an old
+ * run in VS Code's history shows the current line detail). A large set is added to its run in slices
+ * that give the event loop control back.
  */
 export class Publisher {
   private readonly controller: vscode.TestController;
@@ -64,13 +71,17 @@ export class Publisher {
   private shown = false;
   private readonly settleListeners = new Set<() => void>();
   /**
-   * The files of the last publication by path. A file whose parts are the same objects again is
-   * published as the same `FileCoverage`: VS Code keeps the files of every run in its history, so a
-   * republication after one project changed costs that project's files only.
+   * The files of the last publication by path. A file with the same counts again is published as the
+   * same `FileCoverage`: VS Code keeps the files of every run in its history, so a republication
+   * after one project changed costs that project's changed files only.
    */
   private published = new Map<string, AccumulatedFileCoverage>();
+  /** Bumped by every publication and close: a sliced publication that is no longer the latest stops. */
+  private generation = 0;
+  /** `store.merged()` by path, for `loadDetailedCoverage`; rebuilt when the merged list changes. */
+  private index: { of: readonly MergedEntry[]; byPath: Map<string, MergedEntry> } | undefined;
 
-  constructor(private readonly store: CoverageStore) {
+  constructor(private readonly store: CoverageStore, private readonly slices: SliceOptions = DEFAULT_SLICES) {
     this.controller = vscode.tests.createTestController('coverageTools', 'Coverage Tools');
     // The profile exists only so that our runs can carry coverage and answer `loadDetailedCoverage`.
     // Its handler does nothing: we never start a run on the user's behalf from VS Code's own "Run with
@@ -79,10 +90,15 @@ export class Publisher {
     this.profile = this.controller.createRunProfile('Coverage', vscode.TestRunProfileKind.Coverage, () => {}, false);
     this.profile.loadDetailedCoverage = async (_run, file) => {
       if (!(file instanceof AccumulatedFileCoverage)) return [];
-      const data = file.parts.length === 1 ? file.parts[0] : unionFiles(file.parts);
+      const entry = this.entryOf(file.path);
+      if (entry === undefined) return []; // No longer in the store.
+      const data = entry.parts.length === 1 ? entry.parts[0] : unionFiles(entry.parts);
       return toDetails(data).map(toVSCode);
     };
-    this.subscription = store.onDidChange(() => this.schedule());
+    this.subscription = store.onDidChange(() => {
+      this.index = undefined; // Holds the superseded entries otherwise.
+      this.schedule();
+    });
   }
 
   /**
@@ -95,30 +111,50 @@ export class Publisher {
     return { dispose: () => { this.settleListeners.delete(wrapped); } };
   }
 
-  /** Publishes the accumulated set now, cancelling a pending publication. Publishes nothing when it is empty. */
-  publishNow(): void {
+  /**
+   * Publishes the accumulated set now, cancelling a pending publication; resolves once it is
+   * published (or superseded by a newer one). Publishes nothing when it is empty.
+   */
+  publishNow(): Promise<void> {
     this.cancelPending();
+    const generation = ++this.generation;
+    let sliceStart = performance.now();
     const entries = this.store.merged();
-    const published = new Map<string, AccumulatedFileCoverage>();
-    if (entries.length > 0) {
+    if (entries.length === 0) {
+      this.published = new Map();
+      this.settled();
+      return Promise.resolve();
+    }
+    return (async () => {
+      const published = new Map<string, AccumulatedFileCoverage>();
       const request = new vscode.TestRunRequest(undefined, undefined, this.profile);
       const run = this.controller.createTestRun(request, 'Coverage Tools', false);
-      for (const e of entries) {
+      for (let i = 0; i < entries.length; i++) {
+        if ((i & 63) === 63 && performance.now() - sliceStart >= this.slices.sliceMs) {
+          await this.slices.yieldToLoop();
+          if (generation !== this.generation) {
+            run.end(); // A newer publication (or a close) took over.
+            return;
+          }
+          sliceStart = performance.now();
+        }
+        const e = entries[i];
         const before = this.published.get(e.path);
-        const file = before !== undefined && sameParts(before.parts, e.parts) ? before : new AccumulatedFileCoverage(before?.uri ?? vscode.Uri.file(e.path), e.summary, e.parts);
+        const file = before?.shows(e.summary) ? before : new AccumulatedFileCoverage(before?.uri ?? vscode.Uri.file(e.path), e.summary, e.path);
         published.set(e.path, file);
         run.addCoverage(file);
       }
       run.end();
       this.shown = true;
-    }
-    this.published = published;
-    this.settled();
+      this.published = published;
+      this.settled();
+    })();
   }
 
   /** Closes the native coverage display. */
   async close(): Promise<void> {
     this.cancelPending();
+    this.generation++;
     this.shown = false;
     this.published = new Map();
     this.settled();
@@ -131,6 +167,7 @@ export class Publisher {
 
   dispose(): void {
     this.cancelPending();
+    this.generation++;
     this.published = new Map();
     this.subscription.dispose();
     this.settleListeners.clear();
@@ -143,8 +180,14 @@ export class Publisher {
       this.timer = undefined;
       // Coverage that became empty must not leave the last run on screen.
       if (this.shown && this.store.merged().length === 0) void this.close();
-      else this.publishNow();
+      else void this.publishNow();
     }, PUBLISH_DEBOUNCE_MS);
+  }
+
+  private entryOf(path: string): MergedEntry | undefined {
+    const merged = this.store.merged();
+    if (this.index?.of !== merged) this.index = { of: merged, byPath: new Map(merged.map(e => [e.path, e])) };
+    return this.index.byPath.get(path);
   }
 
   private settled(): void {
