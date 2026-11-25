@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import type { Project, RunTarget } from '../../../src/adapters/types';
 import {
-  batchNotices, failureDetails, outcomeNotice, progressMessage, runBatch, type RunItem,
+  batchNotices, failureDetails, InFlight, lineLogger, loggedRun, outcomeNotice, progressMessage, runBatch, type RunItem,
 } from '../../../src/runner/batch';
 import { RunQueue } from '../../../src/runner/queue';
 import type { RunOutcome } from '../../../src/runner/runProject';
@@ -144,4 +144,85 @@ test('a single run shows its own message; several runs show at most one warning 
     { severity: 'warning', text: 'Tests failed in a, c; coverage was still loaded.', showOutput: false },
     { severity: 'error', text: 'Coverage failed for 2 project(s): b, d. See the output for details.', showOutput: true },
   ]);
+});
+
+/** What a command does with the shared InFlight: claim, then run what is new. */
+function request(queue: RunQueue, inFlight: InFlight, run: (it: RunItem, signal: AbortSignal) => Promise<RunOutcome>, items: RunItem[]) {
+  return runBatch(inFlight.claim(items), { queue, run, inFlight });
+}
+
+test('two Run All requests in a row run each project once', async () => {
+  const queue = new RunQueue();
+  const inFlight = new InFlight();
+  const ran: string[] = [];
+  const run = async (it: RunItem): Promise<RunOutcome> => {
+    ran.push(it.project.name);
+    await tick();
+    return { status: 'ok' };
+  };
+  const first = request(queue, inFlight, run, [item('a'), item('b')]);
+  const second = request(queue, inFlight, run, [item('a'), item('b')]);
+  expect(await second).toEqual([]);
+  await first;
+  expect(ran).toEqual(['a', 'b']);
+  // Once they have finished, the same request runs them again.
+  await request(queue, inFlight, run, [item('a')]);
+  expect(ran).toEqual(['a', 'b', 'a']);
+});
+
+test('Run Coverage Here on a project Run All queued is not added again; another target of it is', async () => {
+  const queue = new RunQueue();
+  const inFlight = new InFlight();
+  const runner = fakeRunner();
+  const all = request(queue, inFlight, runner.run, [item('a'), item('b')]);
+  const partial = (paths: string[]): RunItem => ({ project: project('b'), target: { kind: 'partial', paths } });
+  expect(inFlight.claim([item('b')])).toEqual([]);
+  expect(inFlight.claim([partial(['/w/b/x.test.js']), partial(['/w/b/x.test.js'])])).toEqual([partial(['/w/b/x.test.js'])]);
+  expect(inFlight.claim([partial(['/w/b/y.test.js'])])).toHaveLength(1);
+  queue.cancelAll();
+  await all;
+  // The full runs were released when they settled; the claimed partial ones were never queued here.
+  expect(inFlight.claim([item('a'), item('b')])).toHaveLength(2);
+});
+
+test('loggedRun logs the start, the output line by line and the end', async () => {
+  const logs: string[] = [];
+  const outcome = await loggedRun(item('web'), new AbortController().signal, m => logs.push(m), async output => {
+    output('one\ntw');
+    output('o\r\nthree');
+    return { status: 'tests-failed' };
+  });
+  expect(outcome).toEqual({ status: 'tests-failed' });
+  expect(logs).toEqual(['Running coverage for web (all tests).', 'one', 'two', 'three', 'Finished coverage for web: tests-failed.']);
+});
+
+test('loggedRun still flushes the output and writes the end line when the run throws', async () => {
+  const logs: string[] = [];
+  const outcome = await loggedRun(
+    { project: project('web'), target: { kind: 'partial', paths: ['/w/web/a.test.js'] } }, new AbortController().signal, m => logs.push(m),
+    async output => {
+      output('partial line');
+      throw new Error('boom');
+    },
+  );
+  expect(outcome).toEqual({ status: 'spawn-error', message: 'Unexpected error: boom' });
+  expect(logs).toEqual(['Running coverage for web (/w/web/a.test.js).', 'partial line', 'Finished coverage for web: spawn-error.']);
+});
+
+test('loggedRun of a run cancelled before it started only logs its end', async () => {
+  const logs: string[] = [];
+  const aborted = new AbortController();
+  aborted.abort();
+  await loggedRun(item('web'), aborted.signal, m => logs.push(m), async () => ({ status: 'cancelled' }));
+  expect(logs).toEqual(['Finished coverage for web: cancelled.']);
+});
+
+test('lineLogger keeps an unfinished line until flush', () => {
+  const logs: string[] = [];
+  const l = lineLogger(m => logs.push(m));
+  l.write('a\nb');
+  expect(logs).toEqual(['a']);
+  l.flush();
+  l.flush();
+  expect(logs).toEqual(['a', 'b']);
 });

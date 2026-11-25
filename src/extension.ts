@@ -4,6 +4,7 @@ import { customAdapter } from './adapters/custom';
 import { ADAPTERS } from './adapters/index';
 import { createPythonAdapter } from './adapters/python';
 import type { Adapter, AdapterId, Project, RunTarget } from './adapters/types';
+import { loggedRun } from './runner/batch';
 import { RunQueue } from './runner/queue';
 import { runProject, type RunOutcome } from './runner/runProject';
 import { RunSuppressions } from './runner/suppression';
@@ -80,10 +81,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
 
   const run = (project: Project, target: RunTarget, signal: AbortSignal): Promise<RunOutcome> => {
     if (!isTrusted()) return Promise.resolve({ status: 'cancelled' });
-    const lines = lineLogger(log);
-    // A queued run cancelled before it started only reports that it finished.
-    if (!signal.aborted) log(`Running coverage for ${project.name} (${target.kind === 'full' ? 'all tests' : target.paths.join(', ')}).`);
-    return runProject(project, target, {
+    return loggedRun({ project, target }, signal, log, output => runProject(project, target, {
       adapters: runAdapters,
       store,
       parser,
@@ -92,14 +90,9 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       settings: readSettings(vscode.Uri.file(project.dir)),
       roots: (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
       c8Bin,
-      output: lines.write,
+      output,
       suppress: key => suppressions.suppress(key),
-    }, signal).then(outcome => {
-      lines.flush();
-      // Tells when a run has ended, and how (tests wait on this line too).
-      log(`Finished coverage for ${project.name}: ${outcome.status}.`);
-      return outcome;
-    });
+    }, signal));
   };
 
   context.subscriptions.push(
@@ -132,22 +125,6 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
 }
 
 export function deactivate(): void {}
-
-/** Logs process output line by line (a log channel stamps every entry). */
-function lineLogger(log: (msg: string) => void): { write(chunk: string): void; flush(): void } {
-  let rest = '';
-  return {
-    write(chunk) {
-      const lines = (rest + chunk).split(/\r?\n/);
-      rest = lines.pop() ?? '';
-      for (const line of lines) log(line);
-    },
-    flush() {
-      if (rest !== '') log(rest);
-      rest = '';
-    },
-  };
-}
 
 async function showCoverage(store: CoverageStore, publisher: Publisher): Promise<void> {
   if (store.merged().length === 0) {

@@ -155,6 +155,10 @@ test('a run made by the extension is not ingested a second time by the watcher',
   await new Promise((r) => setTimeout(r, 4_000));
   expect(await outputChannelText(s)).not.toContain(`Loaded ${report}`);
   await waitForCoverageRow(s, 'calc.py', '50.00%');
+  // Control: the same report written outside a run, after the tail, is loaded (so the watcher did see that path).
+  await writeReport(report, lcov({ [join(ws, 'calc.py')]: [[1, 0], [2, 0], [5, 0], [6, 0], [7, 0], [8, 0]] }));
+  await waitForLoaded(s, report);
+  await waitForCoverageRow(s, 'calc.py', '0.00%');
 });
 
 /** Two workspace folders, each a custom-command project. */
