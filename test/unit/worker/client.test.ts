@@ -162,3 +162,58 @@ test('dispose() rejects pending requests and leaves no worker running', async ()
   expect(client.running).toBe(false);
   expect(client.startedWorkers).toBe(1);
 });
+
+const SCRIPTED_WORKER = path.join(__dirname, 'fixtures/scripted-worker.mjs');
+
+test('a report sent in several messages resolves once, with every file in order', async () => {
+  client.dispose();
+  client = new ParserClient(SCRIPTED_WORKER);
+  const r = await client.parse('chunks:4', []);
+  expect(r.files.map(f => f.path)).toEqual(['/w/4-0.js', '/w/4-1.js', '/w/4-2.js', '/w/4-3.js']);
+  expect(Array.from(r.files[0].statements)).toEqual([1, 0, 0, 0, 1]);
+  expect(r.signature).toBe('sig-4');
+  expect(r.dropped).toBe(1);
+  await client.idle();
+  expect(client.running).toBe(false);
+});
+
+test('the messages of two requests in flight are kept apart', async () => {
+  client.dispose();
+  client = new ParserClient(SCRIPTED_WORKER);
+  const [a, b] = await Promise.all([client.parse('slow:3', []), client.parse('slow:2', [])]);
+  expect(a.files.map(f => f.path)).toEqual(['/w/3-0.js', '/w/3-1.js', '/w/3-2.js']);
+  expect(b.files.map(f => f.path)).toEqual(['/w/2-0.js', '/w/2-1.js']);
+  expect(client.startedWorkers).toBe(1);
+});
+
+test('an error in the middle of an answer rejects once and leaves nothing pending', async () => {
+  client.dispose();
+  client = new ParserClient(SCRIPTED_WORKER);
+  await expect(client.parse('fail-mid', [])).rejects.toBeInstanceOf(ReportParseError);
+  await client.idle();
+  expect(client.running).toBe(false);
+  // The worker stopped with nothing pending; the next request starts a fresh one.
+  expect((await client.parse('chunks:1', [])).files).toHaveLength(1);
+  expect(client.startedWorkers).toBe(2);
+});
+
+test('a worker that dies in the middle of an answer rejects the request, and the next parse uses a fresh worker', async () => {
+  client.dispose();
+  client = new ParserClient(SCRIPTED_WORKER);
+  const error = await client.parse('die-mid', []).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toMatch(/worker/i);
+  expect(client.running).toBe(false);
+  expect((await client.parse('chunks:2', [])).files).toHaveLength(2);
+  expect(client.startedWorkers).toBe(2);
+});
+
+test('a report of 600 files, sent in several messages, comes through whole and in order', async () => {
+  const many = Array.from({ length: 600 }, (_, i) => `src/f${i}.js`);
+  for (const f of many) writeFileSync(path.join(root, f), '');
+  const big = path.join(root, 'coverage/big.info');
+  writeFileSync(big, many.map(f => `SF:${f}\nDA:1,1\nend_of_record\n`).join(''));
+  const r = await client.parse(big, [root]);
+  expect(r.files).toHaveLength(600);
+  expect(r.files.map(f => f.path)).toEqual([...r.files.map(f => f.path)].sort());
+});

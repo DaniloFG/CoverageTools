@@ -2,7 +2,7 @@ import { MessageChannel, type MessagePort } from 'node:worker_threads';
 import { expect, test } from 'vitest';
 import { FileBuilder } from '../../../src/model';
 import { NotCoverageReportError, ReportParseError } from '../../../src/parsers/types';
-import { errorKindOf, errorOf, fromWire, toWire, type WireReport } from '../../../src/worker/protocol';
+import { errorKindOf, errorOf, fromWire, toResponses, toWire, type WireReport } from '../../../src/worker/protocol';
 
 function receive(port: MessagePort): Promise<WireReport> {
   return new Promise(resolve => port.once('message', resolve));
@@ -58,4 +58,20 @@ test('error kinds round-trip to their classes', () => {
   expect(io).toBeInstanceOf(Error);
   expect(io).not.toBeInstanceOf(ReportParseError);
   expect(io).not.toBeInstanceOf(NotCoverageReportError);
+});
+
+test('toResponses splits a report into files messages of the given size, then one end', () => {
+  const files = Array.from({ length: 5 }, (_, i) => {
+    const b = new FileBuilder(`/w/${i}.js`);
+    b.addLine(1, i);
+    return b.build();
+  });
+  const responses = toResponses(7, { files, signature: 's', dropped: 3 }, 2);
+  expect(responses.map(r => r.message.ok && r.message.part)).toEqual(['files', 'files', 'files', 'end']);
+  expect(responses.map(r => (r.message.ok && r.message.part === 'files' ? r.message.files.map(f => f.path) : []))).toEqual([
+    ['/w/0.js', '/w/1.js'], ['/w/2.js', '/w/3.js'], ['/w/4.js'], [],
+  ]);
+  expect(responses[3].message).toEqual({ id: 7, ok: true, part: 'end', signature: 's', dropped: 3 });
+  expect(responses.every(r => r.message.id === 7)).toBe(true);
+  expect(responses[0].transfer).toHaveLength(6);
 });

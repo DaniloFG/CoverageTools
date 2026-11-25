@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads';
+import type { FileCoverageData } from '../model';
 import type { ParsedReport } from '../parsers/types';
-import { errorOf, fromWire, type ParseRequest, type ParseResponse } from './protocol';
+import { errorOf, fromWireFile, type ParseRequest, type ParseResponse } from './protocol';
 
 /** A thrown value as text; a worker can throw anything, not only an Error. */
 function describe(error: unknown): string {
@@ -9,13 +10,16 @@ function describe(error: unknown): string {
 
 interface Pending {
   worker: Worker;
+  /** The files received so far, in report order. */
+  files: FileCoverageData[];
   resolve(report: ParsedReport): void;
   reject(error: Error): void;
 }
 
 /**
  * Parses coverage reports in a worker thread. The worker is started by the first request and
- * terminated as soon as no request is pending; there is no idle timer.
+ * terminated as soon as no request is pending; there is no idle timer. A report arrives in several
+ * messages (see `ParseResponse`); `parse` resolves once, with all of it.
  */
 export class ParserClient {
   private worker: Worker | undefined;
@@ -48,7 +52,7 @@ export class ParserClient {
     const worker = this.worker ?? this.start();
     const id = this.nextId++;
     return new Promise<ParsedReport>((resolve, reject) => {
-      this.pending.set(id, { worker, resolve, reject });
+      this.pending.set(id, { worker, files: [], resolve, reject });
       const request: ParseRequest = { id, reportPath, roots: [...roots] };
       try {
         worker.postMessage(request);
@@ -79,9 +83,13 @@ export class ParserClient {
 
   private onResponse(response: ParseResponse): void {
     const entry = this.pending.get(response.id);
-    if (entry === undefined) return;
+    if (entry === undefined) return; // A request already rejected (or disposed): the rest of its answer is dropped.
+    if (response.ok && response.part === 'files') {
+      for (const f of response.files) entry.files.push(fromWireFile(f));
+      return;
+    }
     this.pending.delete(response.id);
-    if (response.ok) entry.resolve(fromWire(response.report));
+    if (response.ok) entry.resolve({ files: entry.files, signature: response.signature, dropped: response.dropped });
     else entry.reject(errorOf(response.kind, response.message));
     if (this.pending.size === 0 && this.worker !== undefined) this.stop(this.worker);
   }

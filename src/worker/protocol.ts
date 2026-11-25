@@ -24,9 +24,19 @@ export interface WireReport {
 
 export type ErrorKind = 'parse' | 'not-coverage' | 'io';
 
+/**
+ * The answer to one request, in several messages so that the main thread never deserializes a whole
+ * large report at once (each message is taken in on its own turn of the event loop): `files`
+ * messages with at most CHUNK_FILES files each, in report order, then one `end`; or, at any point
+ * instead of what is left, one error.
+ */
 export type ParseResponse =
-  | { id: number; ok: true; report: WireReport }
+  | { id: number; ok: true; part: 'files'; files: WireFile[] }
+  | { id: number; ok: true; part: 'end'; signature: string; dropped: number }
   | { id: number; ok: false; kind: ErrorKind; message: string };
+
+/** Files per `files` message. */
+export const CHUNK_FILES = 250;
 
 /** A buffer holding exactly the array's elements, so that transferring it moves nothing else. */
 function ownBuffer(a: Uint32Array): ArrayBuffer {
@@ -51,15 +61,29 @@ export function toWire(report: ParsedReport): { report: WireReport; transfer: Ar
   return { report: { files, signature: report.signature, dropped: report.dropped }, transfer: [...transfer] };
 }
 
-export function fromWire(report: WireReport): ParsedReport {
-  const files = report.files.map((f): FileCoverageData => ({
+export function fromWireFile(f: WireFile): FileCoverageData {
+  return {
     path: f.path,
     statements: new Uint32Array(f.statements),
     branches: new Uint32Array(f.branches),
     declarations: new Uint32Array(f.declarations),
     names: f.names,
-  }));
-  return { files, signature: report.signature, dropped: report.dropped };
+  };
+}
+
+export function fromWire(report: WireReport): ParsedReport {
+  return { files: report.files.map(fromWireFile), signature: report.signature, dropped: report.dropped };
+}
+
+/** The messages that answer request `id` with `report`, each with the buffers it moves. */
+export function toResponses(id: number, report: ParsedReport, chunkFiles = CHUNK_FILES): Array<{ message: ParseResponse; transfer: ArrayBuffer[] }> {
+  const out: Array<{ message: ParseResponse; transfer: ArrayBuffer[] }> = [];
+  for (let i = 0; i < report.files.length; i += chunkFiles) {
+    const wire = toWire({ files: report.files.slice(i, i + chunkFiles), signature: '', dropped: 0 });
+    out.push({ message: { id, ok: true, part: 'files', files: wire.report.files }, transfer: wire.transfer });
+  }
+  out.push({ message: { id, ok: true, part: 'end', signature: report.signature, dropped: report.dropped }, transfer: [] });
+  return out;
 }
 
 export function errorKindOf(e: unknown): ErrorKind {
