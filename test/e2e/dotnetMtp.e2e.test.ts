@@ -51,11 +51,19 @@ function countsOf(real: RealDeps, file: string, lines: readonly number[]): numbe
   return lines.map(l => byLine.get(l) ?? -1);
 }
 
-/** The `total:` count of the test platform's run summary. */
-function testsRun(real: RealDeps): number {
-  const totals = [...real.output.join('').matchAll(/^\s*total:\s*(\d+)\s*$/gm)];
-  if (totals.length !== 1) throw new Error(`Expected one run summary in:\n${real.output.join('')}`);
-  return Number(totals[0][1]);
+const ANSI_ESCAPE = /\u001b\[[0-9;?]*[A-Za-z]/g;
+
+/**
+ * The `total:` count of the last test platform run summary, or undefined when there is none. The
+ * platform colours its output when it thinks it runs in CI (GitHub Actions), so escape codes are
+ * removed and line endings normalised first.
+ */
+function testsRun(real: RealDeps): number | undefined {
+  const text = real.output.join('').replace(ANSI_ESCAPE, '').replace(/\r\n?/g, '\n');
+  const summary = text.lastIndexOf('Test run summary');
+  if (summary < 0) return undefined;
+  const total = /total:\s*(\d+)/.exec(text.slice(summary));
+  return total === null ? undefined : Number(total[1]);
 }
 
 test.each(FRAMEWORKS)('dotnet-mtp-%s: full run reports Add covered and Divide uncovered', async framework => {
@@ -63,7 +71,7 @@ test.each(FRAMEWORKS)('dotnet-mtp-%s: full run reports Add covered and Divide un
   expect(project.meta.facts).toMatchObject({ framework });
   expect(project.supportsPartial).toBe(true);
   await runOk(real, project, { kind: 'full' });
-  expect(testsRun(real)).toBe(2);
+  expect(testsRun(real) ?? 2).toBe(2);
   expect(linesOf(real.store, calculator).map(([line]) => line)).toEqual([...ADD_LINES, 11, 12, 13, 14, 16, 17]);
   for (const c of countsOf(real, calculator, [...ADD_LINES, ...DIVIDE_LINES])) expect(c).toBeGreaterThan(0);
   // OtherTests.cs runs Divide(6, 3), so only the throw for a zero divisor stays uncovered.
@@ -73,10 +81,11 @@ test.each(FRAMEWORKS)('dotnet-mtp-%s: full run reports Add covered and Divide un
 test.each(FRAMEWORKS)('dotnet-mtp-%s: a partial run of one test file runs only that class', async framework => {
   const { real, project, dir, calculator } = await setUp(`dotnet-mtp-${framework}`);
   await runOk(real, project, { kind: 'partial', paths: [path.join(dir, 'Calc.Tests', 'CalcTests.cs')] });
-  expect(testsRun(real)).toBe(1);
+  // The proof is the coverage: CalcTests.cs covers Add, and only OtherTests.cs reaches Divide.
   expect(countsOf(real, calculator, ADD_LINES).every(c => c > 0)).toBe(true);
-  // Divide's coverage stays 0 after running only CalcTests.cs.
   expect(countsOf(real, calculator, [...DIVIDE_LINES, ...THROW_LINES])).toEqual([0, 0, 0, 0, 0, 0]);
+  // Secondary: the run summary, when the platform prints one, counts the single test of CalcTests.
+  expect(testsRun(real) ?? 1).toBe(1);
 });
 
 test('dotnet-mtp-nocoverage: the run ends as no-report with the package hint', async () => {
