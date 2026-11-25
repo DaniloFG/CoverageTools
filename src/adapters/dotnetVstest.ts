@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { hasTestAttributes, readProjectFacts, testClassesIn, type ProjectFacts } from './dotnetShared';
+import { fullyQualifiedNameFilter, hasTestAttributes, readProjectFacts, testTypesOf, type ProjectFacts } from './dotnetShared';
 import type { Adapter, FsReader, PlanContext, Project, RunPlan, RunTarget } from './types';
 
 const HINT = 'No coverage report was produced. Check that the test project builds and that its tests run with "dotnet test".';
@@ -32,21 +32,6 @@ function collectionArgs(facts: ProjectFacts, setting: string, tmpDir: string): s
     return ['/p:CollectCoverage=true', '/p:CoverletOutputFormat=cobertura', `/p:CoverletOutput=${tmpDir}/`];
   }
   return ['--collect:Code Coverage;Format=cobertura'];
-}
-
-/** The qualified test classes of the `.cs` files and folders of a partial target, each once. */
-async function testClassesOf(paths: readonly string[], exclude: readonly string[], fs: FsReader): Promise<string[]> {
-  const files: string[] = [];
-  for (const p of paths) {
-    if (isCsFile(p)) files.push(p);
-    else files.push(...(await fs.find(p, ['**/*.cs'], ['**/bin/**', '**/obj/**', ...exclude])));
-  }
-  const classes = new Set<string>();
-  for (const file of new Set(files)) {
-    const text = await fs.readText(file);
-    if (text !== undefined && hasTestAttributes(text)) for (const c of testClassesIn(text)) classes.add(c);
-  }
-  return [...classes];
 }
 
 export const dotnetVstestAdapter: Adapter = {
@@ -82,10 +67,9 @@ export const dotnetVstestAdapter: Adapter = {
     const facts = (project.meta.facts as ProjectFacts | undefined) ?? (await readProjectFacts(csproj, ctx.fs));
     const filter: string[] = [];
     if (target.kind === 'partial') {
-      const classes = await testClassesOf(target.paths, ctx.settings.exclude, ctx.fs);
-      if (classes.length === 0) return { steps: [], reportSearchDir: ctx.tmpDir, hint: NO_TEST_CLASSES_HINT };
-      // The trailing dot keeps `~` (contains) from also matching classes whose name starts the same.
-      filter.push('--filter', classes.map(c => `FullyQualifiedName~${c}.`).join('|'));
+      const types = await testTypesOf(target.paths, ctx.settings.exclude, ctx.fs);
+      if (types.length === 0) return { steps: [], reportSearchDir: ctx.tmpDir, hint: NO_TEST_CLASSES_HINT };
+      filter.push('--filter', fullyQualifiedNameFilter(types));
     }
     const args = [
       'test', csproj,

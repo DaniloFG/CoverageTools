@@ -5,7 +5,10 @@ import { afterAll, expect, test } from 'vitest';
 import { dotnetVstestAdapter } from '../../src/adapters/dotnetVstest';
 import type { Project, RunTarget } from '../../src/adapters/types';
 import { runProject } from '../../src/runner/runProject';
+import { prepareDotnetEnv } from './dotnetEnv';
 import { createRealDeps, linesOf, nodeFsReader, sampleDir, type RealDeps } from './helpers';
+
+prepareDotnetEnv();
 
 const SAMPLES = ['dotnet-vstest-coverlet', 'dotnet-vstest-plain', 'dotnet-vstest-msbuild'];
 
@@ -51,8 +54,8 @@ test.each(SAMPLES)('%s: full run reports Add covered and the throw in Divide unc
   expect(countsOf(real, calculator, THROW_LINES)).toEqual([0, 0]);
 });
 
-test('coverlet sample: partial runs of two test files accumulate', async () => {
-  const { real, project, dir, calculator } = await setUp('dotnet-vstest-coverlet');
+test.each(SAMPLES)('%s: partial runs of two test files accumulate', async sample => {
+  const { real, project, dir, calculator } = await setUp(sample);
   await run(real, project, { kind: 'partial', paths: [path.join(dir, 'Calc.Tests', 'CalcTests.cs')] });
   expect(countsOf(real, calculator, ADD_LINES).every(c => c > 0)).toBe(true);
   expect(countsOf(real, calculator, DIVIDE_LINES)).toEqual([0, 0, 0, 0]);
@@ -61,6 +64,16 @@ test('coverlet sample: partial runs of two test files accumulate', async () => {
   expect(countsOf(real, calculator, ADD_LINES).every(c => c > 0)).toBe(true);
   expect(countsOf(real, calculator, DIVIDE_LINES).every(c => c > 0)).toBe(true);
   expect(countsOf(real, calculator, THROW_LINES)).toEqual([0, 0]);
+});
+
+test('coverlet sample: a partial run of a file with non-ASCII names runs exactly that class', async () => {
+  const { real, project, dir, calculator } = await setUp('dotnet-vstest-coverlet');
+  await run(real, project, { kind: 'partial', paths: [path.join(dir, 'Calc.Tests', 'CálculoTests.cs')] });
+  const output = real.output.join('');
+  expect(output).toContain('--filter FullyQualifiedName~Calc.Tests.Más.CálculoTests.');
+  expect(output).toMatch(/Passed:\s+1, Skipped:\s+0, Total:\s+1,/);
+  expect(countsOf(real, calculator, ADD_LINES).every(c => c > 0)).toBe(true);
+  expect(countsOf(real, calculator, DIVIDE_LINES)).toEqual([0, 0, 0, 0]);
 });
 
 test('no TestResults folder is created inside the sample', () => {

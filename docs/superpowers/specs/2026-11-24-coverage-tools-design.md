@@ -181,8 +181,16 @@ Regras comuns:
   (`echo "Error: no test specified" && exit 1`) não conta como script real.
 - Propriedades de projeto .NET são procuradas no `.csproj` e nos arquivos
   `Directory.Build.props`, `Directory.Packages.props` e
-  `Directory.Build.targets` do diretório dele até a raiz (no máximo 20
-  níveis), mais o `global.json` mais próximo. A leitura é textual (o MSBuild
+  `Directory.Build.targets` que o MSBuild importaria, mais o `global.json`
+  mais próximo. Como no MSBuild, de cada nome vale só o arquivo mais próximo
+  (procurado do diretório do projeto para cima, no máximo 20 níveis); o de
+  cima só vale também quando o mais próximo o importa explicitamente
+  (`GetPathOfFileAbove` ou `GetDirectoryNameOfFileAbove` com o mesmo nome de
+  arquivo). As leituras de uma passada de descoberta são compartilhadas entre
+  os projetos, e a busca de um nome para no primeiro arquivo encontrado.
+  Nomes de namespace e de classe aceitam identificadores Unicode, e um
+  atributo de teste só conta dentro de uma seção de atributos (`[ ... ]`
+  onde uma declaração pode começar). A leitura é textual (o MSBuild
   não é executado): condições não são avaliadas; nos arquivos importados,
   elementos com `Condition` são ignorados (costumam valer só para alguns
   projetos), e no `.csproj` são mantidos (costumam escolher o framework de
@@ -296,7 +304,17 @@ e o lê ao terminar.
   coverlet grava `<source>/</source>` e caminhos relativos a ela; o coletor
   da Microsoft grava caminhos absolutos e também mede os assemblies de
   teste. O ponto final no filtro evita que `~` (contém) pegue também classes
-  cujo nome começa igual (`CalcTests` e `CalcTestsSlow`).
+  cujo nome começa igual (`CalcTests` e `CalcTestsSlow`); em classe genérica
+  ele é omitido (`FullyQualifiedName~Ns.G`), porque o nome dos testes vem
+  fechado (`Ns.G<Int32>.Metodo`).
+- **Limitações conhecidas do filtro por classe** (VSTest e as sintaxes
+  `FullyQualifiedName~` do Microsoft.Testing.Platform): o `~` é "contém" e o
+  VSTest não tem "começa com", então `FullyQualifiedName~Tests.CalcTests.`
+  também seleciona `UnitTests.CalcTests.M` de outro namespace; uma classe
+  genérica sem o ponto final pode selecionar também outra classe cujo nome
+  começa igual; e testes declarados em uma classe base abstrata são
+  reportados sob a classe derivada, de modo que rodar o arquivo da base não
+  os seleciona.
 - **Microsoft.Testing.Platform.** O projeto de testes é um executável, então
   `dotnet run` funciona igual em qualquer versão do SDK e modo de
   `dotnet test`. As opções `--coverage*` vêm da extensão de cobertura da
@@ -466,6 +484,8 @@ não aparece.
   sobre Microsoft.Testing.Platform), `coverage` ou `pytest-cov` (Python),
   provedor de cobertura do Vitest (`@vitest/coverage-v8`), ou relatório
   `lcov`/`json` no script (Node com `nyc`/`c8` próprio).
+- **Projetos com mais de um framework de destino** no VSTest geram um
+  relatório por framework, e só o mais recente é incorporado.
 - **Relatório malformado:** registrado na saída e ignorado; os dados
   anteriores do projeto são mantidos.
 - **Arquivos do relatório que não existem no disco** são descartados (por

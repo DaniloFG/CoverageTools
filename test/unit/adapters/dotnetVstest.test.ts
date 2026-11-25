@@ -105,6 +105,16 @@ test('partial plan adds --filter with FullyQualifiedName~ for each test class, j
   ]);
 });
 
+test('a generic test class is filtered without the trailing dot, so its closed names still match', async () => {
+  const file = path.join(dir, 'GenericTests.cs');
+  const fs = memoryFs({
+    [csproj]: csprojWith(['NUnit']),
+    [file]: 'namespace N;\n[TestFixture(typeof(int))]\npublic class G<T> { [Test] public void T1() {} }\npublic class P { [Test] public void T2() {} }\n',
+  });
+  const plan = await dotnetVstestAdapter.plan(await detected(fs), { kind: 'partial', paths: [file] }, ctx(fs));
+  expect(plan.steps[0].args.slice(-2)).toEqual(['--filter', 'FullyQualifiedName~N.G|FullyQualifiedName~N.P.']);
+});
+
 test('a partial target with no test classes yields a plan with no steps and an explanatory hint', async () => {
   const helper = path.join(dir, 'Helper.cs');
   const fs = memoryFs({ [csproj]: csprojWith([]), [helper]: 'namespace Calc.Tests; public class Helper {}' });
