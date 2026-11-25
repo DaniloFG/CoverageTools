@@ -41,11 +41,15 @@ const SDK_ELEMENT = /<Sdk\b[^>]*?\sName\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 const IMPORT_ELEMENT = /<Import\b[^>]*?\sProject\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 const GLOBAL_JSON_RUNNER = /"test"\s*:\s*\{[^{}]*?"runner"\s*:\s*"([^"]*)"/i;
 
+/** File texts by path. */
+type FileCache = Map<string, Promise<string | undefined>>;
+
 /**
- * File texts by path, shared by the `readProjectFacts` calls of one discovery pass so that the
- * MSBuild files above several projects are read once.
+ * The imported MSBuild files and global.json read through each reader. Discovery uses one reader
+ * object per pass, so the files above several projects are read once per pass and read again by the
+ * next pass, which has a new reader.
  */
-export type FileCache = Map<string, Promise<string | undefined>>;
+const fileCaches = new WeakMap<FsReader, FileCache>();
 
 /**
  * Whether an MSBuild file imports the next file of the same name above it, the way MSBuild documents
@@ -68,17 +72,21 @@ function importsFileAbove(text: string, name: string): boolean {
  * MSBuild is not run, so conditions are not evaluated. Conditional elements of the imported files
  * are skipped (they usually target some projects only, e.g. `'$(IsTestProject)' == 'true'`); those
  * of the csproj are kept (they usually select a target framework). Properties of the csproj override
- * those of the props files, and those of the targets files override both. Pass the same `cache` to
- * the calls of one discovery pass to read each file once.
+ * those of the props files, and those of the targets files override both. The imported files are
+ * cached per `fs` object (see `fileCaches`); the csproj itself is always read.
  */
-export async function readProjectFacts(csproj: string, fs: FsReader, cache?: FileCache): Promise<ProjectFacts> {
+export async function readProjectFacts(csproj: string, fs: FsReader): Promise<ProjectFacts> {
   const dirs: string[] = [];
   for (let dir = path.dirname(path.resolve(csproj)); dirs.length < MAX_LEVELS; dir = path.dirname(dir)) {
     dirs.push(dir);
     if (path.dirname(dir) === dir) break;
   }
+  let cache = fileCaches.get(fs);
+  if (cache === undefined) {
+    cache = new Map();
+    fileCaches.set(fs, cache);
+  }
   const readText = (file: string): Promise<string | undefined> => {
-    if (cache === undefined) return fs.readText(file);
     let text = cache.get(file);
     if (text === undefined) {
       text = fs.readText(file);

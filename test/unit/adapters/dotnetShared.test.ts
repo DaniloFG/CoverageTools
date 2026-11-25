@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { expect, test } from 'vitest';
 import { hasTestAttributes, projectsInSolution, readProjectFacts, testClassesIn, testTypesIn } from '../../../src/adapters/dotnetShared';
+import { dotnetMtpAdapter } from '../../../src/adapters/dotnetMtp';
+import { dotnetVstestAdapter } from '../../../src/adapters/dotnetVstest';
 import type { FsReader } from '../../../src/adapters/types';
 import { memoryFs } from './memoryFs';
 
@@ -122,17 +124,31 @@ test('probing stops at the nearest file of each name, and a shared cache avoids 
   // Directory.Packages.props and Directory.Build.targets are missing: probed up to the root.
   expect(count('Directory.Build.targets')).toBe(4);
 
-  const cache = new Map<string, Promise<string | undefined>>();
+  // Reads are cached per reader: a second project read with the same reader object reads only its own directory.
   const sibling = path.join(root, 'tests', 'Other.Tests', 'Other.Tests.csproj');
-  reads.length = 0;
-  await readProjectFacts(csproj, fs, cache);
   const first = [...reads];
   reads.length = 0;
-  await readProjectFacts(sibling, fs, cache);
-  // The files above both projects (tests/ and up) are not read again.
+  await readProjectFacts(sibling, fs);
   expect(reads.filter(r => first.includes(r))).toEqual([]);
   expect(first).toContain(path.join(root, 'tests', 'Directory.Build.targets'));
   expect(reads).not.toContain(path.join(root, 'tests', 'Directory.Build.targets'));
+});
+
+test('two detects with the same reader read a shared Directory.Build.props once; another reader reads it again', async () => {
+  const props = path.join(root, 'Directory.Build.props');
+  const files = {
+    [csproj]: project('<ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /><PackageReference Include="xunit" /></ItemGroup>'),
+    [path.join(root, 'tests', 'Other.Tests', 'Other.Tests.csproj')]: project('<ItemGroup><PackageReference Include="TUnit" /></ItemGroup>'),
+    [props]: project('<PropertyGroup><Nullable>enable</Nullable></PropertyGroup>'),
+  };
+  const { fs, reads } = countingFs(files);
+  expect(await dotnetVstestAdapter.detect(csproj, fs)).toBeDefined();
+  expect(await dotnetMtpAdapter.detect(path.join(root, 'tests', 'Other.Tests', 'Other.Tests.csproj'), fs)).toBeDefined();
+  expect(reads.filter(r => r === props)).toHaveLength(1);
+
+  const other = countingFs(files);
+  await dotnetVstestAdapter.detect(csproj, other.fs);
+  expect(other.reads.filter(r => r === props)).toHaveLength(1);
 });
 
 test('<IsTestProject>false</IsTestProject> wins over a Microsoft.NET.Test.Sdk reference', async () => {
