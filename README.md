@@ -162,8 +162,8 @@ against them:
 
 - **No startup cost.** It activates after VS Code has finished starting, and
   reads no files, starts no timer and creates no watcher when it does.
-  Measured: about 12 ms to load and activate (the activate call itself takes
-  about 1 ms).
+  Measured on a development machine: 12 to 16 ms to load and activate (the
+  activate call itself takes under 2 ms).
 - **Truly idle.** No timers, no worker threads and no periodic scans at rest.
   It listens to VS Code's file-change notifications through one watcher per
   workspace folder; 50,000 unrelated file events cost about 24 ms in total.
@@ -173,13 +173,14 @@ against them:
   most about 13 ms at a time.
 - **Reports are read off the main thread.** Coverage reports are parsed in a
   worker. A 54 MB Cobertura report of 5,000 files blocks the extension host
-  for at most about 42 ms at a time, and holding it accumulated and published
-  takes about 32 MB of memory.
+  for at most about 35 to 45 ms at a time, and holding it accumulated and
+  published takes about 32 MB of memory, which stays flat across repeated
+  re-runs.
 - **Detail on demand.** Only per-file totals are published. Line-by-line
   detail is loaded when you open a file.
 - **One run at a time.** Test runs are separate processes, queued so your
   machine stays usable.
-- **Small.** The bundled code is about 97 KB.
+- **Small.** The bundled code is about 100 KB.
 - **No telemetry and no network access.**
 
 ## Settings
@@ -224,6 +225,9 @@ against them:
   project's data. Use the right-click menu for partial runs that add up.
 - **Nothing is persisted.** Coverage starts empty every time VS Code starts,
   and reports already on disk are not loaded.
+- **Old runs show today's lines.** Opening an earlier run from VS Code's Test
+  Results history shows the current line-by-line detail, not the detail of
+  that moment (the history would otherwise keep every old copy in memory).
 - **Untrusted workspaces are read-only.** In a workspace you have not marked
   as trusted, the extension runs no commands. It only reads coverage reports
   that appear.
