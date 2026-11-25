@@ -4,6 +4,8 @@ Data: 2026-11-24
 Status: aprovado pelo usuário em 2026-11-24 (revisão 3). Revisão 4, feita ao
 escrever o plano: atualiza os fatos sobre o ambiente de desenvolvimento
 (seções 3 e 9) e precisa onde a mesclagem roda (seção 6.1, item 4).
+Implementado na versão 0.1.0 (2026-11-25). Os desvios em relação a este
+texto estão na seção "Desvios registrados na implementação", no fim.
 Plano: `docs/superpowers/plans/2026-11-24-coverage-tools.md`
 
 ## 1. Intenção e porquê
@@ -822,3 +824,29 @@ Regras:
 - Detalhes de escape de argumentos por sistema operacional.
 - Estrutura dos projetos de exemplo em `samples/`.
 - Como o script de captura dirige o VS Code.
+
+## Desvios registrados na implementação
+
+- A mesclagem dos dados roda na linha principal; só a leitura e a análise dos
+  relatórios rodam no worker (a união de execuções parciais grandes é feita em
+  fatias que devolvem o controle ao laço de eventos).
+- Plano A confirmado: o controlador de testes não registra itens; as execuções
+  existem só para publicar cobertura.
+- O observador usa um único watcher `**/*` por pasta do workspace,
+  compartilhado pela descoberta e pela detecção de relatórios, com trabalho
+  limitado por evento (filtros sem E/S, no máximo um `stat` por caminho novo,
+  busca limitada em pastas criadas).
+- A regra de aninhamento é aplicada antes dos comandos personalizados.
+- As linhas de comando .NET (VSTest e Microsoft.Testing.Platform) foram
+  corrigidas por execuções reais (filtros com ponto final,
+  `--results-directory`, `--coverage-output` absoluto, argumentos extras depois
+  de `--` no MTP).
+- TypeScript executado com tsx/ts-node sob o c8 mostra funções e ramos extras
+  na linha 1 e marca como coberta a linha `export function` de uma função não
+  executada (limitação conhecida, documentada no README).
+- A barra de status mostra o mesmo percentual que a raiz da view Test
+  Coverage: a fórmula `totalCoverage` do VS Code (declarações, ramos e funções
+  somados, ou o modo de `testing.displayedCoveragePercent`), com duas casas
+  decimais.
+- O handler do perfil Coverage do controlador não faz nada (o
+  `Run Tests with Coverage` nativo não inicia execuções da extensão).

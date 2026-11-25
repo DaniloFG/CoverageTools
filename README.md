@@ -2,11 +2,8 @@
 
 **See the test coverage of your whole workspace at once, in VS Code's native coverage UI.**
 
-> **Status: in development — not released yet.**
-> No version of the extension has shipped. This README describes how the first
-> release is meant to behave and is updated as features land. See
-> [Feature status](#feature-status) for what exists today and
-> [CHANGELOG.md](CHANGELOG.md) for what changed and what is coming.
+Version 0.1.0 is the first release. See [What's included](#whats-included)
+and [CHANGELOG.md](CHANGELOG.md).
 
 ## The problem
 
@@ -51,6 +48,8 @@ TEST COVERAGE
 - **Stays out of your way.** Built to be very light: it does nothing at
   startup, nothing while idle, and reads reports off the main extension
   thread. See [Lightweight by design](#lightweight-by-design).
+- **Shows the same number as VS Code.** The status bar total is the
+  percentage the Test Coverage view shows for the root of its tree.
 - **Stays until you replace it.** Coverage remains displayed until a new
   coverage run updates it or VS Code restarts. Nothing is saved between
   sessions.
@@ -62,11 +61,11 @@ a `test` script, or a particular coverage package.
 
 | Ecosystem | Test tool | How the extension runs it | Run a single file or folder |
 |-----------|-----------|---------------------------|-----------------------------|
-| .NET (C#) | Any VSTest-based test project (xUnit, NUnit, MSTest) | `dotnet test` with coverlet if the project has it, otherwise the collector that ships with the test SDK | Yes |
-| .NET (C#) | Any Microsoft.Testing.Platform test project (MSTest, NUnit, xUnit v3, TUnit) | the test project itself with `--coverage` | Depends on the test framework |
-| Node | Jest | the `test` script if it runs Jest, otherwise Jest directly, with `--coverage` | Yes |
-| Node | Vitest | the `test` script if it runs Vitest, otherwise Vitest directly, with `--coverage` | Yes |
-| Node | Anything else (Mocha, AVA, `node --test`, Jasmine, tap, …) | the test command wrapped in a bundled [c8](https://github.com/bcoe/c8) | No, whole project only |
+| .NET (C#) | VSTest test projects (xUnit, NUnit, MSTest) | `dotnet test` with the coverage collector the project has (coverlet's collector or coverlet.msbuild), otherwise the collector that ships with the test SDK | Yes, by test class |
+| .NET (C#) | Microsoft.Testing.Platform test projects (MSTest, NUnit, xUnit v3, TUnit) | `dotnet run` of the test project with `--coverage` | Yes, by test class (xUnit v2 on the platform: whole project only) |
+| Node | Jest | the `test` script if it runs Jest, otherwise Jest directly, with coverage on | Yes |
+| Node | Vitest | the `test` script if it runs Vitest, otherwise Vitest directly, with coverage on | Yes |
+| Node | Anything else (Mocha, AVA, `node --test`, Jasmine, tap, …) | the `test` script wrapped in a bundled [c8](https://github.com/bcoe/c8) | No, whole project only |
 | Python | pytest or `unittest` | pytest-cov if installed, otherwise coverage.py | Yes |
 
 Single projects and monorepos both work without configuration. When test
@@ -128,7 +127,7 @@ project). `npm run screenshots` takes them again.
    extension's test run replaces the display, click that item, or run
    `Coverage Tools: Show Coverage`.
 
-   ![The bottom of the VS Code window, with the Coverage Tools total of 88.4% in the status bar](docs/images/06-status-bar.png)
+   ![The bottom of the VS Code window, with the Coverage Tools total of 88.24% in the status bar](docs/images/06-status-bar.png)
 
 ## Commands
 
@@ -140,7 +139,10 @@ project). `npm run screenshots` takes them again.
 | `Coverage Tools: Clear Coverage` | Command Palette | Empties the accumulated coverage and closes the native view |
 
 A status bar item shows the accumulated total and whether a run is in
-progress.
+progress. The total is computed exactly as the Test Coverage view computes the
+percentage of a row (statements, branches and functions together, or what
+`testing.displayedCoveragePercent` selects), with the same two decimals. Its
+tooltip lists the total of each project.
 
 ## How accumulation works
 
@@ -155,105 +157,159 @@ progress.
 ## Lightweight by design
 
 Being light is a core requirement, not an afterthought. The extension is
-built to these rules, and each release is checked against them:
+built to these rules, and an automated performance suite checks every change
+against them:
 
 - **No startup cost.** It activates after VS Code has finished starting, and
-  reads no files when it does.
-- **Truly idle.** No timers and no periodic scans. While idle, it only listens
-  to VS Code's own file-change notifications.
+  reads no files, starts no timer and creates no watcher when it does.
+  Measured: about 12 ms to load and activate (the activate call itself takes
+  about 1 ms).
+- **Truly idle.** No timers, no worker threads and no periodic scans at rest.
+  It listens to VS Code's file-change notifications through one watcher per
+  workspace folder; 50,000 unrelated file events cost about 24 ms in total.
 - **Background discovery.** Finding your test projects happens in small steps
   after startup, and only the affected part is redone when something changes.
-- **Reports are read off the main thread.** Large coverage reports are parsed
-  in a worker, so IntelliSense and other extensions are not held up.
+  Discovering 30 projects among 20,000 files blocks the extension host for at
+  most about 13 ms at a time.
+- **Reports are read off the main thread.** Coverage reports are parsed in a
+  worker. A 54 MB Cobertura report of 5,000 files blocks the extension host
+  for at most about 42 ms at a time, and holding it accumulated and published
+  takes about 32 MB of memory.
 - **Detail on demand.** Only per-file totals are published. Line-by-line
   detail is loaded when you open a file.
 - **One run at a time.** Test runs are separate processes, queued so your
   machine stays usable.
+- **Small.** The bundled code is about 97 KB.
 - **No telemetry and no network access.**
 
 ## Settings
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
-| `coverageTools.watch.enabled` | `true` | Detect coverage runs made outside the extension |
-| `coverageTools.watch.globs` | the report patterns listed above | Where to look for coverage reports |
-| `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/__pycache__/**` | Ignored during discovery and watching |
-| `coverageTools.nestedProjects` | `inner` | For nested test projects, run the inner ones (`inner`) or the outer one (`outer`) |
-| `coverageTools.dotnet.collector` | `""` (auto-detect) | Force the value passed to `--collect` (VSTest) |
-| `coverageTools.dotnet.extraArgs` | `[]` | Extra arguments for `dotnet test` (VSTest) or for the test application (Microsoft.Testing.Platform) |
-| `coverageTools.node.extraArgs` | `[]` | Extra arguments for the Node test command |
-| `coverageTools.python.interpreter` | `""` (auto-detect) | Python interpreter to use |
-| `coverageTools.python.extraArgs` | `[]` | Extra arguments for the Python test runner |
-| `coverageTools.commands` | `{}` | Your own coverage command for a project, keyed by its path relative to the workspace folder; `${coverageDir}` is replaced with the folder the report must be written to |
+| `coverageTools.watch.enabled` | `true` | Detect coverage reports written by runs made outside the extension (terminal, tasks, scripts) |
+| `coverageTools.watch.globs` | the seven report patterns listed above | Glob patterns, relative to each workspace folder, of the coverage reports to detect |
+| `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/__pycache__/**` | Paths ignored during discovery and watching |
+| `coverageTools.nestedProjects` | `inner` | When test projects of the same ecosystem are nested, run the inner ones (`inner`) or the outer one (`outer`) |
+| `coverageTools.dotnet.collector` | `""` (chosen from the project's packages) | Forces the value passed to `--collect` for VSTest projects, for example `XPlat Code Coverage` |
+| `coverageTools.dotnet.extraArgs` | `[]` | Extra arguments for .NET test runs: for VSTest projects they are added to `dotnet test`; for Microsoft.Testing.Platform projects they are passed to the test application (after `--`) |
+| `coverageTools.node.extraArgs` | `[]` | Extra arguments for the Node test command (Jest, Vitest, or the test script run under c8) |
+| `coverageTools.python.interpreter` | `""` (auto-detect) | Python interpreter used to run tests and convert `.coverage` files. Empty: the project's `.venv` or `venv`, then the interpreter selected in the Python extension, then `python3` |
+| `coverageTools.python.extraArgs` | `[]` | Extra arguments for the Python test runner (pytest or unittest) |
+| `coverageTools.commands` | `{}` | Your own coverage command per project: maps a project directory, relative to the workspace folder, to a command line run there through the shell. `${coverageDir}` is replaced with a temporary directory where the command must write an Istanbul JSON, Cobertura or LCOV report. The directory becomes a project (full runs only) and replaces any project found inside it |
 
 ## Requirements
 
 - VS Code 1.90 or later.
-- **.NET:** the .NET SDK. VSTest-based projects need nothing else.
-  Microsoft.Testing.Platform projects need the platform's code coverage
-  extension (`Microsoft.Testing.Extensions.CodeCoverage`), which MSTest
-  includes by default.
-- **Node:** Node.js 18 or later and the project's own test tool. Vitest also
-  needs its coverage provider (`@vitest/coverage-v8`).
+- **.NET:** the .NET SDK. VSTest projects need nothing else.
+  Microsoft.Testing.Platform projects need the code coverage extension: with
+  MSTest.Sdk it is on by default; otherwise the project needs the
+  `Microsoft.Testing.Extensions.CodeCoverage` package.
+- **Node:** Node.js 18 or later for the bundled c8, and the project's own test
+  tool. Vitest also needs its coverage provider (`@vitest/coverage-v8`).
 - **Python:** `coverage` or `pytest-cov` in the project's environment.
 
 ## Known limitations
 
+**Display and data**
+
 - **Other extensions can take over the display.** If you run coverage through
-  C# Dev Kit, the Jest extension, or the Python extension, VS Code switches to
-  that run. Your accumulated coverage is still held; use
-  `Coverage Tools: Show Coverage` to bring it back.
+  C# Dev Kit, the Jest extension, the Python extension or VS Code's own
+  `Run Tests with Coverage`, VS Code switches to that run. Your accumulated
+  coverage is still held; `Coverage Tools: Show Coverage` (or a click on the
+  status bar item) brings it back.
 - **Coverage can go stale.** If you edit a file after a run, the highlighted
   lines may no longer match until you run again. Native coverage behaves the
   same way.
 - **Partial runs from the terminal count as full runs** and replace the
   project's data. Use the right-click menu for partial runs that add up.
+- **Nothing is persisted.** Coverage starts empty every time VS Code starts,
+  and reports already on disk are not loaded.
 - **Untrusted workspaces are read-only.** In a workspace you have not marked
   as trusted, the extension runs no commands. It only reads coverage reports
   that appear.
-- **Node tools other than Jest and Vitest** run as a whole project only.
-- **Nothing is persisted.** Coverage starts empty every time VS Code starts.
 - **coverage.py data files are converted automatically.** In a trusted
   workspace, a coverage.py `.coverage` file that appears in the workspace is
   converted with the project's Python interpreter without any action from you.
-- **Very large partial selections on Windows.** Running a folder with a great
-  many test files at once can exceed the Windows command-line length limit;
-  run the whole project instead.
+- **`Run Tests with Coverage` is VS Code's, not ours.** Those entries belong
+  to VS Code's test explorer and do not start Coverage Tools; use
+  `Run Coverage Here`.
+
+**Node**
+
+- **Node tools other than Jest and Vitest** run as a whole project only.
 - **TypeScript run through tsx or ts-node under c8** shows a few extra
   functions and branches on line 1, and marks the `export function` line of a
   function that never ran as covered.
-- **.NET partial runs select test classes by name.** Tests in generic test
-  fixtures or inherited from a base class may not be selected, and a class
-  name that is a prefix of another class in another namespace can select
-  both.
-- **Multi-targeted .NET test projects** produce one report per target
-  framework; only the newest framework's report is loaded.
+- **c8's exclude list.** The exclude list the extension passes to c8 replaces
+  a project's own c8 or nyc `exclude` setting.
+- **Very large selections on Windows.** Running a folder with a great many
+  test files at once can exceed the Windows command-line length limit, because
+  each selected test file is passed on the command line; run the whole project
+  or a smaller folder instead.
 
-## Feature status
+**.NET**
+
+- **Partial runs select test classes by name.** A run of one test file can
+  also pick up a same-named class in another namespace (for example
+  `Tests.CalcTests` and `UnitTests.CalcTests`).
+- **Generic and inherited test classes.** A partial run of a generic test
+  class can also run another class whose name starts the same, and tests
+  declared in an abstract base class run only when you run the file of the
+  derived class.
+- **TUnit and the global namespace.** With TUnit, a partial run that includes
+  a test class in the global namespace also runs same-named classes in every
+  namespace.
+- **Multi-targeted projects.** A VSTest project with several target
+  frameworks produces one report per framework, and only the newest is kept;
+  Microsoft.Testing.Platform projects run their first target framework only.
+- **Conditional runner settings.** Runner switches (such as
+  `UseMicrosoftTestingPlatformRunner`) set inside a conditional group of
+  `Directory.Build.props` are not seen.
+
+**Custom commands**
+
+- **A custom command on a folder that is not a project of its own**, inside a
+  project the extension recognizes (for example a `legacy/` folder inside a
+  Jest project), keeps that enclosing project. Its full run uses its own tool
+  over the whole project and can still run tests inside the custom folder;
+  only partial runs leave that folder out.
+
+**Platforms**
+
+- The extension is exercised end to end by automated tests on Linux. Its unit
+  tests also run on Windows and macOS.
+
+## What's included
 
 | Feature | Status |
 |---------|--------|
-| Design specification | Approved |
-| Implementation plan | Written |
-| Accumulated coverage in the native UI | Done (unreleased) |
-| Show Coverage and Clear Coverage | Done (unreleased) |
-| Automatic detection of coverage reports | Done (unreleased) |
-| Run All Coverage | Done (unreleased) |
-| Run Coverage Here (Explorer right-click) | Done (unreleased) |
-| .NET support: VSTest | Done (unreleased) |
-| .NET support: Microsoft.Testing.Platform | In progress |
-| Node support: Jest | Done (unreleased) |
-| Node support: Vitest | Done (unreleased) |
-| Node support: any other tool, through c8 | Done (unreleased) |
-| Python support: pytest and unittest | Done (unreleased) |
-| Custom command per project | Done (unreleased) |
-| Status bar total | Done (unreleased) |
-| Usage screenshots in this README | Done (unreleased) |
+| Accumulated coverage in the native UI | Released in 0.1.0 |
+| Status bar total, matching the native percentage | Released in 0.1.0 |
+| Show Coverage and Clear Coverage | Released in 0.1.0 |
+| Automatic detection of coverage reports (Cobertura, Istanbul JSON, LCOV, coverage.py data) | Released in 0.1.0 |
+| Run All Coverage | Released in 0.1.0 |
+| Run Coverage Here (Explorer right-click) | Released in 0.1.0 |
+| .NET support: VSTest | Released in 0.1.0 |
+| .NET support: Microsoft.Testing.Platform | Released in 0.1.0 |
+| Node support: Jest | Released in 0.1.0 |
+| Node support: Vitest | Released in 0.1.0 |
+| Node support: any other tool, through c8 | Released in 0.1.0 |
+| Python support: pytest and unittest | Released in 0.1.0 |
+| Custom command per project | Released in 0.1.0 |
+| Read-only mode in untrusted workspaces | Released in 0.1.0 |
 
 ## Installation
 
-Not available yet. The first release will be distributed as a `.vsix` file
-attached to a GitHub release.
+- **From the Marketplace:** in VS Code, open the Extensions view and search
+  for "Coverage Tools", or run `ext install DaniloFG.coverage-tools` from Quick
+  Open (`Ctrl+P` / `Cmd+P`).
+- **From a `.vsix` file:** download `coverage-tools-<version>.vsix` from the
+  [GitHub Releases page](https://github.com/DaniloFG/CoverageTools/releases),
+  then run **Extensions: Install from VSIX...** from the Command Palette and
+  pick the file.
+
+Maintainers: see [CONTRIBUTING.md](CONTRIBUTING.md#publishing) for how
+releases are built and published.
 
 ## Changelog
 

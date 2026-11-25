@@ -19,42 +19,51 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Planned
 
-- Lightweight operation: no startup cost, no idle work, and report parsing
-  off the main extension thread.
+- Nothing yet.
 
 ### In progress
 
-- Implementation of the first release. The design is approved and the
-  implementation plan is written.
-- .NET (C#) support for Microsoft.Testing.Platform test projects, using the
-  platform's code coverage extension.
+- Nothing yet.
 
 ### Done
 
+- Nothing yet.
+
+## [0.1.0] - 2026-11-25
+
+### Added
+
 - Accumulated coverage for every project in the workspace, shown through VS
-  Code's native Test Coverage UI (per-file percentage, coverage bars,
-  line-by-line highlighting).
+  Code's native Test Coverage UI: per-file and per-folder percentages,
+  coverage bars and line-by-line highlighting. Running one project updates
+  only that project's numbers.
+- `Run All Coverage` runs every test project in the workspace, one at a time,
+  with progress and cancellation (Command Palette and Testing view title).
+- `Run Coverage Here` in the Explorer right-click menu runs a test project,
+  solution, folder or test file; it appears only where there are tests to run,
+  and partial runs add to the project's coverage.
 - Automatic detection of coverage reports written by runs made outside the
-  extension (terminal, tasks, scripts).
-- Reading of Cobertura, Istanbul JSON, and LCOV reports, whatever tool wrote
-  them.
-- `Show Coverage` and `Clear Coverage` commands.
-- Status bar item with the accumulated total.
-- `Run All Coverage` command to run every test project in the workspace, one
-  at a time, with progress and cancellation (Command Palette and Testing view
-  title).
-- `Run Coverage Here` in the Explorer right-click menu for a test project,
-  solution, folder, or test file; it appears only where there are tests to
-  run.
-- .NET (C#) support for VSTest test projects, using whichever coverage
-  collector the project already has.
+  extension (terminal, tasks, scripts): Cobertura, Istanbul JSON and LCOV,
+  whatever tool wrote them, and coverage.py `.coverage` data files.
+- .NET (C#) support for VSTest test projects, using the coverage collector
+  the project already has, and for Microsoft.Testing.Platform test projects
+  (MSTest, NUnit, xUnit v3, TUnit) through the platform's code coverage
+  extension.
 - Node support for Jest and Vitest, with or without a `test` script, and for
   any other tool (Mocha, AVA, `node --test`, …) through a bundled c8.
 - Python support for pytest and `unittest`, through pytest-cov or
-  coverage.py, including detection of coverage.py `.coverage` data files.
+  coverage.py.
 - Single projects and monorepos handled without configuration
-  (`coverageTools.nestedProjects` for nested projects).
+  (`coverageTools.nestedProjects` for nested projects), and a custom coverage
+  command per project (`coverageTools.commands`).
+- A status bar item with the accumulated total, showing the same percentage
+  as the root of the Test Coverage view, with a per-project tooltip; a click
+  brings the accumulated coverage back after another extension's run.
+- `Show Coverage` and `Clear Coverage` commands.
 - Read-only behaviour in untrusted workspaces: no command runs, reports are
   still read.
-- Custom coverage command per project (`coverageTools.commands`).
+- Lightweight operation: no work at startup or at rest, one file watcher per
+  workspace folder, and report parsing off the main extension thread.
 - Usage screenshots in the README, captured from the sample workspace.
+- Automatic releases: every new version is published to the VS Code
+  Marketplace (and Open VSX) and attached as a .vsix to its GitHub release.
