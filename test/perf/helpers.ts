@@ -17,8 +17,6 @@ export const ROOT = nodePath.resolve(__dirname, '../..');
 export const EXTENSION_JS = nodePath.join(ROOT, 'dist', 'extension.js');
 export const WORKER_JS = nodePath.join(ROOT, 'dist', 'worker.js');
 
-const nodeRequire = createRequire(__filename);
-
 export interface ExtensionApi {
   store: import('../../src/store').CoverageStore;
   ready: Promise<void>;
@@ -35,8 +33,13 @@ export interface LoadedExtension {
 /** A fresh copy of `dist/extension.js` (not the module cache's), with `vscode` replaced by `fake`. */
 export function requireBundle(fake: FakeVscode): { activate(context: unknown): ExtensionApi; uninstall(): void } {
   const uninstall = installFakeVscode(fake);
-  delete nodeRequire.cache[EXTENSION_JS];
-  const mod = nodeRequire(EXTENSION_JS) as { activate(context: unknown): ExtensionApi };
+  // A require of its own each time: the module it loads is kept in its parent's `children`, so a
+  // shared parent would keep every earlier copy of the bundle (and, through its `vscode`, every fake
+  // and store) alive, and the memory figures would not be this copy's.
+  const load = createRequire(__filename);
+  delete load.cache[EXTENSION_JS];
+  const mod = load(EXTENSION_JS) as { activate(context: unknown): ExtensionApi };
+  delete load.cache[EXTENSION_JS];
   return { activate: mod.activate, uninstall };
 }
 
@@ -104,12 +107,21 @@ export async function maxBlocks(work: () => Promise<void>, runs = 3): Promise<nu
   return out;
 }
 
-export function gc(): void {
+/**
+ * A full collection, settled: array buffers are freed by a sweeper thread after the collection, so
+ * `external` only drops a moment later; collect, wait, and collect again until it holds still.
+ */
+export async function gc(): Promise<void> {
   const collect = (globalThis as { gc?: () => void }).gc;
   if (collect === undefined) throw new Error('The perf tests need --expose-gc (see the perf project in vitest.config.ts)');
-  // Twice: finalizers of the first collection free more on the second.
-  collect();
-  collect();
+  let last = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < 10; i++) {
+    collect();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const now = usedMemory();
+    if (Math.abs(last - now) < 256 * 1024) return;
+    last = now;
+  }
 }
 
 /**
