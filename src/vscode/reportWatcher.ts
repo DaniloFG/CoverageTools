@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import nodePath from 'node:path';
@@ -143,11 +144,19 @@ export class ReportWatcher {
       parse: (report, roots) => this.deps.parser.parse(report, roots),
       makeTempDir: async () => mkdtemp(nodePath.join(await realpath(os.tmpdir()), 'coverage-tools-')),
       removeDir: dir => rm(dir, { recursive: true, force: true }),
+      removeDirNow: dir => {
+        try {
+          rmSync(dir, { recursive: true, force: true });
+        } catch {
+          // Removed again, asynchronously, once the conversion has ended.
+        }
+      },
       store: this.deps.store,
       keyOf: (file, signature) => this.keyOf(file, signature),
       roots: () => this.roots(),
       log: msg => this.deps.log(msg),
       signal: this.abort.signal,
+      timers: { set: (fn, ms) => setTimeout(fn, ms), clear: h => clearTimeout(h as ReturnType<typeof setTimeout>) },
     });
   }
 

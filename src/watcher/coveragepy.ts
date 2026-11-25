@@ -3,7 +3,10 @@ import { withPythonFallback } from '../adapters/python';
 import type { CommandSpec } from '../adapters/types';
 import type { FileCoverageData } from '../model';
 import type { ParsedReport } from '../parsers/types';
-import type { IngestResult } from './batcher';
+import type { IngestResult, Timers } from './batcher';
+
+/** How long a conversion may run before it is killed. */
+export const CONVERSION_TIMEOUT_MS = 60_000;
 
 /**
  * Converts a coverage.py data file into a Cobertura report: `<python> -m coverage xml`, run in the
@@ -28,13 +31,19 @@ export interface CoverageDataDeps {
   /** A fresh, empty directory outside the workspace. */
   makeTempDir(): Promise<string>;
   removeDir(dir: string): Promise<void>;
+  /** Removes a directory synchronously, never throwing: used on dispose, as the host may exit next. */
+  removeDirNow(dir: string): void;
   store: { replace(key: string, files: readonly FileCoverageData[]): void };
   /** The store key of the data file's coverage: the owning project's key, else an `unowned:` key. */
   keyOf(coverageFile: string, signature: string): string;
   roots(): readonly string[];
   log(msg: string): void;
-  /** Aborted when the watcher is disposed. */
+  /** Aborted when the watcher is disposed: a running conversion is killed. */
   signal: AbortSignal;
+  /** For the conversion timeout; the timer only exists while a conversion runs. */
+  timers: Timers;
+  /** Defaults to CONVERSION_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 function messageOf(e: unknown): string {
@@ -58,19 +67,47 @@ export async function ingestCoverageData(coverageFile: string, deps: CoverageDat
     tmpDir = await deps.makeTempDir();
     const xml = path.join(tmpDir, 'coverage.xml');
     let output = '';
-    let spawnError = '';
-    const { python, result } = await withPythonFallback(resolved, async p => {
-      try {
-        return await deps.exec(conversionSpec(coverageFile, xml, p), { onOutput: chunk => { output += chunk; }, signal: deps.signal });
-      } catch (e) {
-        spawnError = messageOf(e);
-        return undefined;
-      }
-    });
+    const spawnErrors: string[] = [];
+    // Aborted on dispose and on timeout; the timer is cleared as soon as the conversion ends.
+    const run = new AbortController();
+    const dir = tmpDir;
+    const stop = (): void => {
+      run.abort();
+      deps.removeDirNow(dir);
+    };
+    deps.signal.addEventListener('abort', stop, { once: true });
+    if (deps.signal.aborted) run.abort();
+    let timedOut = false;
+    const timeoutMs = deps.timeoutMs ?? CONVERSION_TIMEOUT_MS;
+    const timer = deps.timers.set(() => {
+      timedOut = true;
+      run.abort();
+    }, timeoutMs);
+    let converted;
+    try {
+      converted = await withPythonFallback(resolved, async p => {
+        if (run.signal.aborted) return undefined;
+        try {
+          return await deps.exec(conversionSpec(coverageFile, xml, p), { onOutput: chunk => { output += chunk; }, signal: run.signal });
+        } catch (e) {
+          spawnErrors.push(`${p}: ${messageOf(e)}`);
+          return undefined;
+        }
+      });
+    } finally {
+      deps.timers.clear(timer);
+      deps.signal.removeEventListener('abort', stop);
+    }
+    const { python, result } = converted;
     if (deps.signal.aborted) return 'drop';
     const failed = `Could not convert the coverage.py data file ${coverageFile}`;
+    if (timedOut) {
+      deps.log(`${failed}: "${python} -m coverage xml" did not finish within ${timeoutMs / 1000} s and was stopped.`);
+      return 'drop';
+    }
     if (result === undefined) {
-      deps.log(`${failed}: the Python interpreter "${python}" could not be started (${spawnError}). Set "coverageTools.python.interpreter" to the interpreter of this project's environment.`);
+      const which = spawnErrors.length > 1 ? 'neither "python3" nor "python" could be started' : `the Python interpreter "${python}" could not be started`;
+      deps.log(`${failed}: ${which} (${spawnErrors[0] ?? 'unknown error'}). Set "coverageTools.python.interpreter" to the interpreter of this project's environment.`);
       return 'drop';
     }
     if (result.code !== 0) {
