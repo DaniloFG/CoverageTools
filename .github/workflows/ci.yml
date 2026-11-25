@@ -5,13 +5,19 @@ on:
   pull_request:
 
 jobs:
+  # Lint, build, bundle size and unit tests on every OS the extension supports: the unit tests cover the
+  # Windows command-line quoting and path handling, which nothing else exercises on Windows and macOS.
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run lint
@@ -25,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - uses: actions/setup-python@v5
         with:
@@ -34,8 +40,9 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: npm ci
-      # The UI tests run the tools of these samples (Jest, pytest, .NET with coverlet).
-      - run: node scripts/setup-samples.mjs node-jest python-pytest dotnet-vstest-coverlet
+      # The UI tests run the tools of these samples (Jest, pytest, .NET with coverlet, and Mocha under the
+      # c8 bundled in the packaged .vsix).
+      - run: node scripts/setup-samples.mjs node-jest python-pytest dotnet-vstest-coverlet node-mocha
       - uses: actions/cache@v4
         with:
           path: .vscode-test
@@ -61,7 +68,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -73,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - uses: actions/setup-python@v5
         with:
@@ -85,3 +92,19 @@ jobs:
       - run: npm run build
       - run: node scripts/setup-samples.mjs
       - run: npm run test:e2e
+
+  # The .vsix as a release builds it (release/coverage-tools-<version>.vsix), kept as an artifact.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-tools-vsix
+          path: release/*.vsix
