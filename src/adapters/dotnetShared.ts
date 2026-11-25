@@ -149,10 +149,18 @@ export async function readProjectFacts(csproj: string, fs: FsReader): Promise<Pr
 
   const frameworks = properties.get('targetframeworks') ?? properties.get('targetframework') ?? '';
   const framework = frameworkOf(packages, usesMSTestSdk);
-  // A test framework on Microsoft.Testing.Platform needs no Microsoft.NET.Test.Sdk reference (xunit.v3,
-  // NUnit with EnableNUnitRunner); MSTest's brings it only transitively, which a text reading cannot see.
-  const declaresTest = packages.has('microsoft.net.test.sdk') || isTrue('istestproject') || usesMSTestSdk || packages.has('tunit') ||
-    (usesMtp && framework !== undefined);
+  const names = [...packages];
+  // On Microsoft.Testing.Platform a test project is a test application. Framework packages alone do not
+  // make one (helper libraries reference NUnit, MSTest.TestFramework or xunit.v3.assert, and the
+  // runner is often selected for a whole repository), so only what produces the executable counts.
+  const isTestApplication =
+    valueOf('outputtype') !== 'library' &&
+    (usesMSTestSdk ||
+      packages.has('tunit') ||
+      (usesMtp && names.some(n => /^xunit\.v3(?:\.core)?(?:\.mtp-[\w.-]+)?$/.test(n))) ||
+      (isTrue('enablenunitrunner') && packages.has('nunit') && packages.has('nunit3testadapter')) ||
+      (isTrue('enablemstestrunner') && (packages.has('mstest') || packages.has('mstest.testadapter'))));
+  const declaresTest = packages.has('microsoft.net.test.sdk') || isTrue('istestproject') || isTestApplication;
   return {
     isTest: valueOf('istestproject') !== 'false' && declaresTest,
     usesMtp,

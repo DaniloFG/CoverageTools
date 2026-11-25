@@ -244,6 +244,44 @@ test('an MTP project with a recognised test framework is a test project without 
   expect((await facts({ [csproj]: off })).isTest).toBe(false);
 });
 
+const MTP_GLOBAL_JSON = '{ "test": { "runner": "Microsoft.Testing.Platform" } }';
+
+test.each([
+  ['an xunit.v3.assert-only library', '<PackageReference Include="xunit.v3.assert" /><PackageReference Include="xunit.v3.extensibility.core" />'],
+  ['an NUnit-only library', '<PackageReference Include="NUnit" />'],
+  ['NUnit with its adapter but no EnableNUnitRunner', '<PackageReference Include="NUnit" /><PackageReference Include="NUnit3TestAdapter" />'],
+  ['an MSTest.TestFramework-only library', '<PackageReference Include="MSTest.TestFramework" />'],
+])('under an MTP global.json, %s is not a test project', async (_, refs) => {
+  const f = await facts({ [csproj]: project(`<ItemGroup>${refs}</ItemGroup>`), [path.join(root, 'global.json')]: MTP_GLOBAL_JSON });
+  expect(f.usesMtp).toBe(true);
+  expect(f.isTest).toBe(false);
+});
+
+test.each([
+  ['xunit.v3', '<ItemGroup><PackageReference Include="xunit.v3" /></ItemGroup>'],
+  ['xunit.v3.mtp-v1', '<ItemGroup><PackageReference Include="xunit.v3.mtp-v1" /></ItemGroup>'],
+  ['xunit.v3.core.mtp-v2', '<ItemGroup><PackageReference Include="xunit.v3.core.mtp-v2" /></ItemGroup>'],
+  ['NUnit + NUnit3TestAdapter + EnableNUnitRunner',
+    '<PropertyGroup><EnableNUnitRunner>true</EnableNUnitRunner></PropertyGroup><ItemGroup><PackageReference Include="NUnit" /><PackageReference Include="NUnit3TestAdapter" /></ItemGroup>'],
+  ['MSTest + EnableMSTestRunner', '<PropertyGroup><EnableMSTestRunner>true</EnableMSTestRunner></PropertyGroup><ItemGroup><PackageReference Include="MSTest" /></ItemGroup>'],
+  ['MSTest.TestAdapter + EnableMSTestRunner',
+    '<PropertyGroup><EnableMSTestRunner>true</EnableMSTestRunner></PropertyGroup><ItemGroup><PackageReference Include="MSTest.TestAdapter" /><PackageReference Include="MSTest.TestFramework" /></ItemGroup>'],
+])('under an MTP global.json, a test application with %s is a test project', async (_, body) => {
+  const f = await facts({ [csproj]: project(body), [path.join(root, 'global.json')]: MTP_GLOBAL_JSON });
+  expect(f.isTest).toBe(true);
+});
+
+test('an MTP test application with an explicit <OutputType>Library</OutputType> is not a test project', async () => {
+  for (const body of ['<ItemGroup><PackageReference Include="xunit.v3" /></ItemGroup>', '<ItemGroup><PackageReference Include="TUnit" /></ItemGroup>']) {
+    const f = await facts({ [csproj]: project(`<PropertyGroup><OutputType>Library</OutputType></PropertyGroup>${body}`), [path.join(root, 'global.json')]: MTP_GLOBAL_JSON });
+    expect(f.isTest, body).toBe(false);
+  }
+  expect((await facts({ [csproj]: project('<PropertyGroup><OutputType>Library</OutputType></PropertyGroup>', 'MSTest.Sdk') })).isTest).toBe(false);
+  // A VSTest test project is a library: OutputType does not matter there.
+  const vstest = project('<PropertyGroup><OutputType>Library</OutputType></PropertyGroup><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /></ItemGroup>');
+  expect((await facts({ [csproj]: vstest })).isTest).toBe(true);
+});
+
 test('testClassesIn handles file-scoped and block namespaces and nested namespaces', () => {
   expect(testClassesIn('namespace A.B;\npublic class CalcTests { [Fact] public void T() {} }')).toEqual(['A.B.CalcTests']);
   expect(testClassesIn(`

@@ -163,7 +163,7 @@ em convenções de um time.
 | Adaptador | Um projeto é… | Execução parcial (arquivo/pasta)? |
 |-----------|---------------|-----------------------------------|
 | `dotnet-vstest` | um `.csproj` de testes sobre VSTest: referencia `Microsoft.NET.Test.Sdk` ou declara `<IsTestProject>true</IsTestProject>`, e não se enquadra na linha de baixo | sim |
-| `dotnet-mtp` | um `.csproj` de testes sobre Microsoft.Testing.Platform: SDK `MSTest.Sdk`, `<EnableMSTestRunner>`, `<EnableNUnitRunner>`, `<UseMicrosoftTestingPlatformRunner>`, `<TestingPlatformDotnetTestSupport>`, referência a `TUnit`, ou `global.json` selecionando esse executor; e, salvo `MSTest.Sdk` e `TUnit`, referência a um framework de testes reconhecido (MSTest, NUnit, xUnit) ou ao `Microsoft.NET.Test.Sdk`. `<IsTestProject>false</IsTestProject>` exclui o projeto | depende do framework (seção 5.3) |
+| `dotnet-mtp` | um `.csproj` de testes sobre Microsoft.Testing.Platform: SDK `MSTest.Sdk`, `<EnableMSTestRunner>`, `<EnableNUnitRunner>`, `<UseMicrosoftTestingPlatformRunner>`, `<TestingPlatformDotnetTestSupport>`, referência a `TUnit`, ou `global.json` selecionando esse executor; e que seja uma aplicação de testes: `MSTest.Sdk`, `TUnit`, `xunit.v3` (ou `xunit.v3.core`, `xunit.v3.mtp-*`, `xunit.v3.core.mtp-*`), NUnit com `NUnit3TestAdapter` e `<EnableNUnitRunner>`, `MSTest` ou `MSTest.TestAdapter` com `<EnableMSTestRunner>`, ou ainda `Microsoft.NET.Test.Sdk` ou `<IsTestProject>true</IsTestProject>`. Bibliotecas auxiliares que só referenciam `NUnit`, `MSTest.TestFramework` ou `xunit.v3.assert` não contam (o executor costuma ser escolhido para o repositório inteiro); `<OutputType>Library</OutputType>` exclui uma aplicação de testes, e `<IsTestProject>false</IsTestProject>` exclui qualquer projeto | depende do framework (seção 5.3) |
 | `jest` | um diretório com `package.json` e Jest configurado: chave `jest`, arquivo `jest.config.*`, ou script `test` que chama `jest` ou `react-scripts test` | sim |
 | `vitest` | um diretório com `package.json` e Vitest configurado: arquivo `vitest.config.*`, chave `test` no nível de cima da configuração em `vite.config.*` (fora de comentários e de objetos aninhados como `build.rollupOptions.input`), ou script `test` que chama `vitest` (não `vitest bench`) | sim |
 | `node-generic` | qualquer outro diretório com `package.json` que tenha um script `test` real ou um arquivo `.mocharc.*` (Mocha, AVA, `node --test`, Jasmine, tap etc.) | não |
@@ -216,7 +216,7 @@ e o lê ao terminar.
 | Adaptador | Comando (execução completa) | Filtro na execução parcial |
 |-----------|-----------------------------|----------------------------|
 | `dotnet-vstest` | `dotnet test "<csproj>" <coleta> --results-directory "<tmp>"` | `--filter` com as classes de teste do arquivo/pasta (`FullyQualifiedName~Namespace.Classe.`, com ponto final, unidas por `\|`; classe aninhada como `Namespace.Externa+Interna.`) |
-| `dotnet-mtp` | `dotnet run --project "<csproj>" -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml" --results-directory "<tmp>"` | conforme o framework (abaixo) |
+| `dotnet-mtp` | `dotnet run --project "<csproj>" --no-launch-profile -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml" --results-directory "<tmp>"` | conforme o framework (abaixo) |
 | `jest` | `<jest> --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | `--runTestsByPath` seguido dos arquivos de teste selecionados (uma pasta vira os arquivos de teste dentro dela), caminhos relativos |
 | `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>" --coverage.reportOnFailure`, com `CI=true` (sem `reportOnFailure`, o Vitest 4 não grava relatório quando um teste falha) | os arquivos de teste selecionados, caminhos relativos, precedidos de `--exclude=<arquivo>` para cada outro arquivo de teste que o filtro também pegaria |
 | `node-generic` | `node <c8> --reporter=json --reports-dir="<tmp>" --temp-directory="<tmp>/v8" --exclude=<padrão>… <comando de teste>`, usando o `c8` embutido na extensão | — |
@@ -336,8 +336,10 @@ e o lê ao terminar.
   ela a aplicação recusa `--coverage` ("Option '--coverage' is provided by
   the 'Microsoft.Testing.Extensions.CodeCoverage' extension"), sai com código
   5 sem relatório, e a execução termina com uma dica dizendo qual pacote
-  falta. Em projetos com mais de um framework de destino, acrescenta-se
-  `--framework <primeiro>` antes do `--`. `coverageTools.dotnet.extraArgs`
+  falta. `--no-launch-profile` impede que o `Properties/launchSettings.json`
+  do projeto (variáveis de ambiente, perfil de depuração) entre na execução
+  de cobertura. Em projetos com mais de um framework de destino,
+  acrescenta-se `--framework <primeiro>` antes do `--`. `coverageTools.dotnet.extraArgs`
   vai por último, depois do `--`, ou seja, para a aplicação de testes.
 - **Confirmado com execuções reais** (SDK 8.0.134, Linux, 2026-11-25;
   MSTest.Sdk 4.5.3, NUnit 4.6.1 com NUnit3TestAdapter 6.3.1 e
@@ -352,7 +354,11 @@ e o lê ao terminar.
   `--results-directory` para `<tmp>`; assim nada é criado dentro do projeto.
   O relatório fica em `<tmp>/coverage.cobertura.xml`, com caminhos absolutos,
   começa com BOM e mede só os assemblies de produção (não o de teste). Uma
-  execução em que nenhum teste roda sai com código 8 e não grava relatório.
+  execução em que nenhum teste roda sai com código 8 e não grava relatório;
+  por isso a dica da execução parcial sem relatório diz que nenhum teste
+  pode ter casado com a seleção ou que falta o pacote de cobertura (a da
+  execução completa fala só do pacote). `--no-launch-profile` foi
+  confirmado do mesmo modo (aceito, resultado idêntico).
 - **Execução parcial no Microsoft.Testing.Platform** depende do framework de
   testes, reconhecido pelas referências do projeto, com as classes do
   arquivo/pasta (classe aninhada como `Externa+Interna`; nomes Unicode,
@@ -364,8 +370,12 @@ e o lê ao terminar.
   - TUnit: `--treenode-filter /*/Namespace/Classe/*`; várias classes viram
     `/*/Namespace/(A|B)/*`. O filtro não aceita "ou" entre caminhos inteiros,
     só dentro de um segmento, então classes de namespaces diferentes viram
-    `/*/(N1|N2)/(A|B)/*`, que também pega `N1.B` e `N2.A` se existirem; e
-    uma classe no namespace global usa `*` como namespace.
+    `/*/(N1|N2)/(A|B)/*`, que também pega `N1.B` e `N2.A` se existirem. Uma
+    classe no namespace global só pode ser nomeada com `*`, que vale para
+    qualquer namespace: com ela na seleção o filtro vira `/*/*/(A|B)/*` e
+    também pega classes de mesmo nome em todos os namespaces (confirmado com
+    uma mistura de classe global e com namespace). Classe genérica entra
+    pelo nome sem argumentos de tipo (`/*/Ns/G/*`, confirmado).
 
   Framework não reconhecido (inclusive xUnit v2 sobre a plataforma) aceita
   só execução completa.

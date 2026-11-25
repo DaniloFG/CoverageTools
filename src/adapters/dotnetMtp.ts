@@ -7,6 +7,8 @@ import type { Adapter, FsReader, PlanContext, Project, RunPlan, RunTarget } from
 
 const HINT =
   'The test project did not write a coverage report. Microsoft.Testing.Platform projects need the "Microsoft.Testing.Extensions.CodeCoverage" package.';
+const PARTIAL_HINT =
+  'The test project did not write a coverage report. Either no test matched the selection, or the project lacks the "Microsoft.Testing.Extensions.CodeCoverage" package.';
 const NO_PARTIAL_HINT = 'This test framework cannot run part of a project on Microsoft.Testing.Platform; run the whole project instead.';
 
 const asType = (c: string | TestType): TestType => (typeof c === 'string' ? { name: c, generic: false } : c);
@@ -44,8 +46,10 @@ export function mtpFilterArgs(
       return types.flatMap(t => ['--filter-class', t.name]);
     case 'tunit': {
       const parts = types.map(t => splitNamespace(t.name));
-      // TUnit has no segment for the global namespace that a filter can name.
-      return ['--treenode-filter', `/*/${anyOf(parts.map(([ns]) => (ns === '' ? '*' : ns)))}/${anyOf(parts.map(([, c]) => c))}/*`];
+      // The global namespace has no segment a filter can name, only `*`, which covers every namespace.
+      const namespaces = parts.some(([ns]) => ns === '') ? '*' : anyOf(parts.map(([ns]) => ns));
+      // Generic classes are named without type arguments, as TUnit's tree does.
+      return ['--treenode-filter', `/*/${namespaces}/${anyOf(parts.map(([, c]) => c))}/*`];
     }
     default:
       return undefined;
@@ -77,8 +81,9 @@ export const dotnetMtpAdapter: Adapter = {
   },
 
   /**
-   * `dotnet run --project <csproj> [--framework <first target>] -- <coverage options> [filter] [extra]`:
-   * the test project is an executable, so this works the same with every SDK and `dotnet test` mode.
+   * `dotnet run --project <csproj> --no-launch-profile [--framework <first target>] -- <coverage options>
+   * [filter] [extra]`: the test project is an executable, so this works the same with every SDK and
+   * `dotnet test` mode; `Properties/launchSettings.json` is not applied to coverage runs.
    * The report and every other result file go to the run's temp directory (`--results-directory`).
    */
   async plan(project: Project, target: RunTarget, ctx: PlanContext): Promise<RunPlan> {
@@ -93,13 +98,15 @@ export const dotnetMtpAdapter: Adapter = {
     }
     const framework = facts.targetFrameworks.length > 1 ? ['--framework', facts.targetFrameworks[0]] : [];
     const args = [
-      'run', '--project', csproj, ...framework, '--',
+      'run', '--project', csproj, '--no-launch-profile', ...framework, '--',
       '--coverage', '--coverage-output-format', 'cobertura',
       '--coverage-output', path.join(ctx.tmpDir, 'coverage.cobertura.xml'),
       '--results-directory', ctx.tmpDir,
       ...filter,
       ...ctx.settings.dotnetExtraArgs,
     ];
-    return { steps: [{ command: 'dotnet', args, cwd: project.dir }], reportSearchDir: ctx.tmpDir, hint: HINT };
+    // A filter that matches no test makes the application exit with code 8 without writing a report.
+    const hint = target.kind === 'partial' ? PARTIAL_HINT : HINT;
+    return { steps: [{ command: 'dotnet', args, cwd: project.dir }], reportSearchDir: ctx.tmpDir, hint };
   },
 };

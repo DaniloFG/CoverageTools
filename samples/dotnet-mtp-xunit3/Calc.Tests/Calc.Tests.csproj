@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <!-- xunit.analyzers needs a newer compiler than SDK 8.0.1xx has; the analyzers just do not run. -->
+    <NoWarn>$(NoWarn);CS9057</NoWarn>
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
   </PropertyGroup>
 

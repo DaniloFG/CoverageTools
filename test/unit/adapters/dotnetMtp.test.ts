@@ -11,6 +11,8 @@ const tmp = path.resolve('/tmp/ct-1');
 const report = path.join(tmp, 'coverage.cobertura.xml');
 const HINT =
   'The test project did not write a coverage report. Microsoft.Testing.Platform projects need the "Microsoft.Testing.Extensions.CodeCoverage" package.';
+const PARTIAL_HINT =
+  'The test project did not write a coverage report. Either no test matched the selection, or the project lacks the "Microsoft.Testing.Extensions.CodeCoverage" package.';
 const COVERAGE_ARGS = ['--coverage', '--coverage-output-format', 'cobertura', '--coverage-output', report, '--results-directory', tmp];
 
 const XUNIT3 = `<Project Sdk="Microsoft.NET.Sdk">
@@ -71,7 +73,7 @@ test('full plan is dotnet run --project <csproj> -- --coverage --coverage-output
   const fs = memoryFs({ [csproj]: XUNIT3 });
   const project = await detected(fs);
   expect(await dotnetMtpAdapter.plan(project, { kind: 'full' }, ctx(fs))).toEqual({
-    steps: [{ command: 'dotnet', args: ['run', '--project', csproj, '--', ...COVERAGE_ARGS], cwd: dir }],
+    steps: [{ command: 'dotnet', args: ['run', '--project', csproj, '--no-launch-profile', '--', ...COVERAGE_ARGS], cwd: dir }],
     reportSearchDir: tmp,
     hint: HINT,
   });
@@ -83,7 +85,7 @@ test('full plan is dotnet run --project <csproj> -- --coverage --coverage-output
 test('a multi-targeted project adds --framework with the first target', async () => {
   const fs = memoryFs({ [csproj]: XUNIT3.replace('<TargetFramework>net8.0</TargetFramework>', '<TargetFrameworks>net9.0;net8.0</TargetFrameworks>') });
   const plan = await dotnetMtpAdapter.plan(await detected(fs), { kind: 'full' }, ctx(fs));
-  expect(plan.steps[0].args).toEqual(['run', '--project', csproj, '--framework', 'net9.0', '--', ...COVERAGE_ARGS]);
+  expect(plan.steps[0].args).toEqual(['run', '--project', csproj, '--no-launch-profile', '--framework', 'net9.0', '--', ...COVERAGE_ARGS]);
 });
 
 test.each([
@@ -95,6 +97,9 @@ test.each([
   ['tunit', ['A.B.C', 'A.B.D+Inner'], ['--treenode-filter', '/*/A.B/(C|D+Inner)/*']],
   ['tunit', ['A.B.C', 'A.D'], ['--treenode-filter', '/*/(A.B|A)/(C|D)/*']],
   ['tunit', ['Global'], ['--treenode-filter', '/*/*/Global/*']],
+  // A class in the global namespace can only be named with `*`, which already covers every namespace.
+  ['tunit', ['Global', 'A.B.C'], ['--treenode-filter', '/*/*/(Global|C)/*']],
+  ['tunit', [{ name: 'A.G', generic: true }], ['--treenode-filter', '/*/A/G/*']],
   ['xunit', ['A.B.C'], undefined],
   [undefined, ['A.B.C'], undefined],
 ] as const)('mtpFilterArgs(%s, %j) is %j', (framework, classes, expected) => {
@@ -108,7 +113,7 @@ test('a generic class keeps the FullyQualifiedName~ filter open after its name',
 
 test('supportsPartial is true only when mtpFilterArgs is defined for the project framework', async () => {
   const xunit2 = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner></PropertyGroup>' +
-    '<ItemGroup><PackageReference Include="xunit" /><PackageReference Include="xunit.runner.visualstudio" /></ItemGroup></Project>';
+    '<ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /><PackageReference Include="xunit" /><PackageReference Include="xunit.runner.visualstudio" /></ItemGroup></Project>';
   const project = await detected(memoryFs({ [csproj]: xunit2 }));
   expect(project.supportsPartial).toBe(false);
   expect((await detected(memoryFs({ [csproj]: XUNIT3 }))).supportsPartial).toBe(true);
@@ -130,10 +135,12 @@ test('partial plan adds the framework filter for the test classes of the files a
   });
   const project = await detected(fs);
   const single = await dotnetMtpAdapter.plan(project, { kind: 'partial', paths: [path.join(dir, 'CalcTests.cs')] }, ctx(fs));
-  expect(single.steps[0].args).toEqual(['run', '--project', csproj, '--', ...COVERAGE_ARGS, '--filter-class', 'Calc.Tests.CalcTests']);
+  expect(single.steps[0].args).toEqual(['run', '--project', csproj, '--no-launch-profile', '--', ...COVERAGE_ARGS, '--filter-class', 'Calc.Tests.CalcTests']);
+  // A filter can match nothing, and then no report is written either.
+  expect(single.hint).toBe(PARTIAL_HINT);
 
   const folder = await dotnetMtpAdapter.plan(project, { kind: 'partial', paths: [dir] }, ctx(fs, { dotnetExtraArgs: ['--x'] }));
-  expect(folder.steps[0].args.slice(4 + COVERAGE_ARGS.length)).toEqual([
+  expect(folder.steps[0].args.slice(5 + COVERAGE_ARGS.length)).toEqual([
     '--filter-class', 'Calc.Tests.CalcTests', '--filter-class', 'Calc.Tests.OtherTests', '--x',
   ]);
 
