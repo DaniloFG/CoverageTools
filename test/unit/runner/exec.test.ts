@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
@@ -10,7 +10,7 @@ let dir: string;
 let leftoverPids: number[];
 
 beforeEach(() => {
-  dir = mkdtempSync(path.join(tmpdir(), 'ct-exec-'));
+  dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'ct-exec-')));
   leftoverPids = [];
 });
 

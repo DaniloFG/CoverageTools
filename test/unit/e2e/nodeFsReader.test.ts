@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,7 +10,7 @@ vi.mock('node:fs/promises', async importOriginal => {
   return { ...actual, readdir: vi.fn(actual.readdir) };
 });
 
-const root = mkdtempSync(path.join(os.tmpdir(), 'ct-find-'));
+const root = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'ct-find-')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 test('find prunes excluded directories instead of walking them', async () => {

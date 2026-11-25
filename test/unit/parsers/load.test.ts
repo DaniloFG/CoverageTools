@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
@@ -9,7 +9,7 @@ import { lines } from '../helpers';
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), 'ct-load-'));
+  root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'ct-load-')));
   mkdirSync(path.join(root, 'src'));
   mkdirSync(path.join(root, 'coverage'));
   writeFileSync(path.join(root, 'src/a.js'), 'a();\nb();\n');

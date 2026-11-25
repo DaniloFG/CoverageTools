@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,7 +65,7 @@ afterEach(async () => {
 
 /** Writes `files` (POSIX paths relative to a new temp directory) and returns the directory. */
 async function tree(files: Record<string, string>, prefix = 'ct-discovery-'): Promise<string> {
-  const root = await mkdtemp(path.join(os.tmpdir(), prefix));
+  const root = realpathSync.native(await mkdtemp(path.join(os.tmpdir(), prefix)));
   temps.push(root);
   for (const [rel, content] of Object.entries(files)) {
     const full = path.join(root, ...rel.split('/'));

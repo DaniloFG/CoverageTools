@@ -21,7 +21,7 @@ let seenTmpDirs: string[];
 let planFor: (ctx: PlanContext, target: RunTarget) => RunPlan;
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(path.join(tmpdir(), 'ct-run-')));
+  root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'ct-run-')));
   mkdirSync(path.join(root, 'src'));
   srcA = path.join(root, 'src', 'a.js');
   srcB = path.join(root, 'src', 'b.js');
