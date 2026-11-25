@@ -11,6 +11,7 @@ import { RunSuppressions } from './runner/suppression';
 import { CoverageStore } from './store';
 import { registerCommands } from './vscode/commands';
 import { readSettings } from './vscode/config';
+import { WorkspaceFileEvents } from './vscode/fileEvents';
 import { vscodeFsReader } from './vscode/fsReader';
 import { ProjectDiscovery } from './vscode/projects';
 import { Publisher } from './vscode/publisher';
@@ -54,13 +55,18 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
     p => vscode.Uri.file(p).fsPath,
     value => void vscode.commands.executeCommand('setContext', 'coverageTools.runnablePaths', value),
   );
+  // One watcher per workspace folder, shared by discovery and the report watcher; created after activation.
+  const fileEvents = new WorkspaceFileEvents({ settingsOf: readSettings });
   const discovery = new ProjectDiscovery({
     makeFs: vscodeFsReader,
     adapters,
     settingsOf: readSettings,
     log,
-    // No cost unless the channel's log level is Trace (`--log DaniloFG.coverage-tools:trace`).
-    trace: msg => channel?.trace(msg),
+    // The message is only built at the Trace log level (`--log DaniloFG.coverage-tools:trace`).
+    trace: msg => {
+      if (channel?.logLevel === vscode.LogLevel.Trace) channel.trace(msg());
+    },
+    events: fileEvents,
     onState: state => runnable.update(state.runnablePaths),
   });
 
@@ -77,6 +83,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
     // Only asks whether a venv interpreter exists; no adapter caches anything on this reader.
     fs: vscodeFsReader(),
     log,
+    events: fileEvents,
   });
 
   const run = (project: Project, target: RunTarget, signal: AbortSignal): Promise<RunOutcome> => {
@@ -96,6 +103,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   };
 
   context.subscriptions.push(
+    fileEvents,
     watcher,
     discovery,
     parser,
@@ -116,6 +124,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
   let watching!: () => void;
   const watchingPromise = new Promise<void>(resolve => { watching = resolve; });
   const pending = setImmediate(() => {
+    fileEvents.start();
     log('Watching for coverage reports.');
     watching();
     discovery.start();

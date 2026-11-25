@@ -69,8 +69,28 @@ function translate(glob: string): string {
   return out;
 }
 
+/** Compiled globs by their forward-slash spelling: the hot paths (file events, discovery) ask for the same few again and again. */
+const compiled = new Map<string, RegExp>();
+/** Bounds the memo; user settings hold a handful of globs, so this is only reached by unusual input. */
+const MAX_COMPILED = 512;
+
+/**
+ * The expression a glob stands for, compiled once per spelling. The expression has no `g` or `y`
+ * flag, so `test` keeps no state and one instance can be shared.
+ */
 export function globToRegExp(glob: string): RegExp {
-  return new RegExp(`^${translate(glob.replace(/\\/g, '/'))}$`);
+  const key = glob.replace(/\\/g, '/');
+  let re = compiled.get(key);
+  if (re === undefined) {
+    if (compiled.size >= MAX_COMPILED) compiled.clear();
+    compiled.set(key, (re = new RegExp(`^${translate(key)}$`)));
+  }
+  return re;
+}
+
+/** How many globs are compiled and kept (for tests). */
+export function globCacheSize(): number {
+  return compiled.size;
 }
 
 /** Whether `path` (either separator) matches one of `globs`. */

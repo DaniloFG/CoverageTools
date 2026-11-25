@@ -59,8 +59,11 @@ export class Publisher {
 
   constructor(private readonly store: CoverageStore) {
     this.controller = vscode.tests.createTestController('coverageTools', 'Coverage Tools');
-    this.profile = this.controller.createRunProfile(
-      'Coverage', vscode.TestRunProfileKind.Coverage, () => this.publishNow(), false);
+    // The profile exists only so that our runs can carry coverage and answer `loadDetailedCoverage`.
+    // Its handler does nothing: we never start a run on the user's behalf from VS Code's own "Run with
+    // Coverage" entry points, so we never compete with another extension's coverage run. Show
+    // Coverage is the way to republish.
+    this.profile = this.controller.createRunProfile('Coverage', vscode.TestRunProfileKind.Coverage, () => {}, false);
     this.profile.loadDetailedCoverage = async (_run, file) => {
       if (!(file instanceof AccumulatedFileCoverage)) return [];
       const data = file.parts.length === 1 ? file.parts[0] : unionFiles(file.parts);

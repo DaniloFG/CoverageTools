@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, expect, test } from 'vitest';
@@ -667,6 +667,39 @@ test('refreshFile: projects or solutions in a directory moved in or deleted ask 
   // A deleted directory that held only a solution.
   await rm(at(root, 'sols'), { recursive: true });
   expect((await refreshFile(state, at(root, 'sols'), fs)).rediscover).toBe(true);
+});
+
+test('refreshFile stats the path once and searches it as a directory moved in only when it is one', async () => {
+  const root = await tree({
+    'web/package.json': JEST('web'),
+    'web/a.test.js': '',
+    'web/tools/gen.py': '',
+    'T/T.csproj': VSTEST_CSPROJ,
+    'T/wwwroot/site.js': '',
+  });
+  const base = countingFs();
+  const stats: string[] = [];
+  const fs = {
+    ...base,
+    kindOf: async (p: string) => {
+      stats.push(p);
+      const st = await stat(p).catch(() => undefined);
+      return st === undefined ? undefined : st.isDirectory() ? 'directory' as const : 'file' as const;
+    },
+  };
+  const state = await run([root], settings(), fs);
+  base.finds.length = 0;
+  // Files that no project there can take: a Python file in a Jest project, a script in a .NET project.
+  for (const rel of ['web/tools/gen.py', 'T/wwwroot/site.js']) {
+    expect(await refreshFile(state, at(root, rel), fs), rel).toEqual({ state, rediscover: false });
+  }
+  expect(base.finds).toEqual([]);
+  expect(stats).toEqual([at(root, 'web/tools/gen.py'), at(root, 'T/wwwroot/site.js')]);
+  // A directory is still searched.
+  await mkdir(at(root, 'web/more'));
+  await writeFile(at(root, 'web/more/c.test.js'), '');
+  expect((await refreshFile(state, at(root, 'web/more'), fs)).state.runnablePaths.has(at(root, 'web/more/c.test.js'))).toBe(true);
+  expect(base.finds).toEqual([at(root, 'web/more'), at(root, 'web/more')]);
 });
 
 test('refreshFile keeps the spelling of a known path and normalizes a new one', async () => {

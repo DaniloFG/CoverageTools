@@ -11,14 +11,24 @@ import { NotCoverageReportError, ReportParseError, type ParsedReport } from '../
 import { exec } from '../runner/exec';
 import type { Settings } from '../settings';
 import type { CoverageStore } from '../store';
-import { isWithin, ownerOf, resultsRootOf, unownedKey } from '../watcher/attribution';
+import { ownerOf, resultsRootOf, unownedKey } from '../watcher/attribution';
 import { ReportBatcher, type IngestResult } from '../watcher/batcher';
 import { ingestCoverageData } from '../watcher/coveragepy';
+import { anyOf, type FileEvent, type FileEventSource } from './fileEvents';
 
 /** Quiet time after the last event of a group before its report is read. */
 const WATCH_DEBOUNCE_MS = 750;
 /** Delay before the one new attempt at a report that could not be read (it may still be being written). */
 const RETRY_MS = 1_000;
+/** At most this many reports are searched for in one created folder. */
+const MAX_FOLDER_RESULTS = 50;
+/** At most this many created folders are searched per quiet period (the outermost ones). */
+const MAX_FOLDER_SCANS = 200;
+/**
+ * A report found in a created folder is loaded only if it was written this recently: a folder moved
+ * or copied in brings old reports, and reports already on disk are never loaded.
+ */
+const RECENT_REPORT_MS = 60_000;
 
 export interface ReportWatcherDeps {
   store: CoverageStore;
@@ -36,27 +46,45 @@ export interface ReportWatcherDeps {
   /** What interpreter resolution reads (whether a venv interpreter exists). */
   fs: FsReader;
   log(msg: string): void;
+  /** The workspace's file events (one watcher per folder, shared with project discovery). */
+  events: FileEventSource;
   /** The workspace folders; `vscode.workspace.workspaceFolders` unless a test injects them. */
   folders?(): readonly vscode.WorkspaceFolder[];
+  /** The clock for "recently written"; `Date.now` unless a test injects one. */
+  now?(): number;
 }
 
-interface Matcher { globs: RegExp[]; exclude: RegExp[]; excludeGlob: string | undefined }
+interface Matcher {
+  globs: RegExp | undefined;
+  exclude: RegExp[];
+  excludeGlob: string | undefined;
+  /** What a created folder is searched for: the last segment of each report glob, under any directory. */
+  folderGlob: string | undefined;
+}
 
 const posixRelative = (from: string, to: string): string => nodePath.relative(from, to).split(nodePath.sep).join('/');
 
 /**
- * Picks up coverage reports written outside the extension (terminal, tasks, scripts): one file
- * system watcher per workspace folder, matched against the report globs, debounced per project, then parsed in the
- * worker and stored under the owning project (or under an `unowned:` key). coverage.py data files
- * (`.coverage`) are first converted to Cobertura with the project's interpreter, in trusted
- * workspaces only. Reports already on disk are not loaded. Creating the watchers reads no file,
- * starts no timer and probes no interpreter.
+ * Picks up coverage reports written outside the extension (terminal, tasks, scripts): the shared
+ * file events of each workspace folder, matched against the report globs, debounced per project, then
+ * parsed in the worker and stored under the owning project (or under an `unowned:` key). coverage.py
+ * data files (`.coverage`) are first converted to Cobertura with the project's interpreter, in trusted
+ * workspaces only. Reports already on disk are not loaded. Construction reads no file, starts no
+ * timer and probes no interpreter.
+ *
+ * A folder created with reports already inside comes as one event for the folder (VS Code drops the
+ * children's). Created extension-less paths are collected over one quiet period; then only the
+ * outermost ones are stat'ed and, if they are folders, searched for report names (at most
+ * MAX_FOLDER_RESULTS each). Of what is found, only reports written in the last RECENT_REPORT_MS are
+ * loaded: a folder moved or copied in brings its old reports, which are not loaded.
  */
 export class ReportWatcher {
   private readonly batcher: ReportBatcher;
-  private watchers: vscode.Disposable[] = [];
   /** Per watched workspace folder: its report globs and excludes, compiled once. */
   private readonly matchers = new Map<string, Matcher>();
+  /** Created extension-less paths waiting for the quiet period to end, with their event. */
+  private readonly createdDirs = new Map<string, FileEvent>();
+  private scanTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly subscriptions: vscode.Disposable[];
   private disposed = false;
   /** Aborted on dispose: stops a running coverage.py conversion. */
@@ -73,9 +101,13 @@ export class ReportWatcher {
     });
     this.subscriptions = [
       vscode.workspace.onDidChangeConfiguration(e => {
-        if (e.affectsConfiguration('coverageTools.watch')) this.rebuild();
+        if (e.affectsConfiguration('coverageTools.watch') || e.affectsConfiguration('coverageTools.exclude')) this.rebuild();
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.rebuild()),
+      // Deletions are of no interest: they never bring coverage.
+      deps.events.onDidFileEvent(e => {
+        if (e.kind !== 'delete') this.onEvent(e);
+      }),
     ];
     this.rebuild();
   }
@@ -83,73 +115,90 @@ export class ReportWatcher {
   dispose(): void {
     this.disposed = true;
     this.abort.abort();
-    for (const d of [...this.subscriptions, ...this.watchers]) d.dispose();
-    this.watchers = [];
+    for (const d of this.subscriptions) d.dispose();
+    this.clearScan();
     this.batcher.dispose();
   }
 
   private rebuild(): void {
-    for (const w of this.watchers) w.dispose();
-    this.watchers = [];
     this.matchers.clear();
+    this.clearScan();
     for (const folder of this.folders()) {
       const settings = this.deps.settingsOf(folder.uri);
       if (!settings.watchEnabled) continue;
+      const names = [...new Set(settings.watchGlobs.map(lastSegment))];
       this.matchers.set(folder.uri.fsPath, {
-        globs: settings.watchGlobs.map(globToRegExp),
+        globs: anyOf(settings.watchGlobs),
         exclude: settings.exclude.map(globToRegExp),
         excludeGlob: oneGlob(settings.exclude),
+        folderGlob: oneGlob(names.map(n => `**/${n}`)),
       });
-      // One watcher per folder for every path, matched against the globs here: a folder created with
-      // reports already inside comes as one event for the folder (VS Code drops the children's).
-      // Deletions are of no interest: they never bring coverage.
-      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '**/*'), false, false, true);
-      this.watchers.push(
-        watcher,
-        watcher.onDidCreate(uri => this.onEvent(uri, true)),
-        watcher.onDidChange(uri => this.onEvent(uri, false)),
-      );
     }
   }
 
-  private onEvent(uri: vscode.Uri, created: boolean): void {
-    if (this.disposed || uri.scheme !== 'file') return;
-    const path = uri.fsPath;
-    const folder = this.folderOf(path);
-    const matcher = folder && this.matchers.get(folder.uri.fsPath);
-    if (!folder || !matcher) return;
-    const relative = posixRelative(folder.uri.fsPath, path);
-    if (matcher.exclude.some(re => re.test(relative))) return;
-    if (matcher.globs.some(re => re.test(relative))) this.batcher.push(path);
+  /** Excluded paths and `.git` never get here (see `WorkspaceFileEvents`). */
+  private onEvent(e: FileEvent): void {
+    if (this.disposed) return;
+    const matcher = this.matchers.get(e.folder);
+    if (matcher === undefined || matcher.globs === undefined) return;
+    if (matcher.globs.test(e.rel)) this.batcher.push(e.path);
     // A name without an extension may be a folder created with reports in it (`coverage`, a TestResults run).
-    else if (created && !nodePath.basename(path).includes('.')) void this.scanCreatedFolder(folder.uri.fsPath, path, matcher);
+    else if (e.kind === 'create' && e.rel !== '' && !e.name.includes('.')) this.queueCreated(e);
   }
 
-  /** Pushes the reports inside `dir` when it is a folder that was just created. */
-  private async scanCreatedFolder(folder: string, dir: string, matcher: Matcher): Promise<void> {
-    let uris: vscode.Uri[];
+  private queueCreated(e: FileEvent): void {
+    this.createdDirs.set(e.path, e);
+    if (this.scanTimer !== undefined) clearTimeout(this.scanTimer);
+    this.scanTimer = setTimeout(() => {
+      this.scanTimer = undefined;
+      void this.scanCreated();
+    }, WATCH_DEBOUNCE_MS);
+  }
+
+  private clearScan(): void {
+    if (this.scanTimer !== undefined) clearTimeout(this.scanTimer);
+    this.scanTimer = undefined;
+    this.createdDirs.clear();
+  }
+
+  /** Searches the outermost of the folders created during the quiet period. */
+  private async scanCreated(): Promise<void> {
+    const created = [...this.createdDirs];
+    this.createdDirs.clear();
+    const dirs = new Set(created.map(([dir]) => dir));
+    const outermost = created.filter(([dir]) => {
+      for (let d = nodePath.dirname(dir); d !== nodePath.dirname(d); d = nodePath.dirname(d)) if (dirs.has(d)) return false;
+      return true;
+    });
+    for (const [, event] of outermost.slice(0, MAX_FOLDER_SCANS)) {
+      if (this.disposed) return;
+      await this.scanCreatedFolder(event);
+    }
+  }
+
+  /** Pushes the recently written reports inside the created path when it is a folder. */
+  private async scanCreatedFolder(e: FileEvent): Promise<void> {
+    const { folder, path: dir } = e;
+    const matcher = this.matchers.get(folder);
+    if (matcher?.globs === undefined || matcher.folderGlob === undefined) return;
+    const now = this.deps.now?.() ?? Date.now();
+    const found: string[] = [];
     try {
-      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(dir));
-      if ((stat.type & vscode.FileType.Directory) === 0) return;
-      uris = await vscode.workspace.findFiles(new vscode.RelativePattern(vscode.Uri.file(dir), '**/*'), matcher.excludeGlob ?? null);
+      // The event's one stat, shared with project discovery.
+      if ((await e.kindOnDisk()) !== 'directory') return;
+      const uris = await vscode.workspace.findFiles(
+        new vscode.RelativePattern(vscode.Uri.file(dir), matcher.folderGlob), matcher.excludeGlob ?? null, MAX_FOLDER_RESULTS);
+      for (const uri of uris) {
+        const relative = posixRelative(folder, uri.fsPath);
+        if (!matcher.globs.test(relative) || matcher.exclude.some(re => re.test(relative))) continue;
+        const { mtime } = await vscode.workspace.fs.stat(uri);
+        if (now - mtime <= RECENT_REPORT_MS) found.push(uri.fsPath);
+      }
     } catch {
       return; // Gone again, or not readable.
     }
     if (this.disposed || this.matchers.get(folder) !== matcher) return;
-    for (const uri of uris) {
-      const relative = posixRelative(folder, uri.fsPath);
-      if (matcher.globs.some(re => re.test(relative)) && !matcher.exclude.some(re => re.test(relative))) this.batcher.push(uri.fsPath);
-    }
-  }
-
-  /** The innermost workspace folder that holds `path`; undefined for paths outside all of them. */
-  private folderOf(path: string): vscode.WorkspaceFolder | undefined {
-    let best: vscode.WorkspaceFolder | undefined;
-    for (const folder of this.folders()) {
-      if (!isWithin(folder.uri.fsPath, path)) continue;
-      if (!best || folder.uri.fsPath.length > best.uri.fsPath.length) best = folder;
-    }
-    return best;
+    for (const p of found) this.batcher.push(p);
   }
 
   private folders(): readonly vscode.WorkspaceFolder[] {
@@ -223,4 +272,10 @@ export class ReportWatcher {
     this.deps.log(`Loaded ${path} (${report.files.length} file(s)).`);
     return 'ok';
   }
+}
+
+// The last segment of a glob (`lcov.info` for the LCOV default); `*` when it is a double star.
+function lastSegment(glob: string): string {
+  const last = glob.replace(/\\/g, '/').split('/').pop() ?? '';
+  return last === '' || last === '**' ? '*' : last;
 }

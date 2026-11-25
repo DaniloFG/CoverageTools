@@ -12,7 +12,10 @@ const h = vi.hoisted(() => ({
   watchers: [] as FakeWatcher[],
   /** Directory → the files `findFiles` returns under it. */
   dirs: new Map<string, string[]>(),
-  findCalls: 0,
+  /** File → its modification time. */
+  mtimes: new Map<string, number>(),
+  finds: [] as Array<{ base: string; pattern: string; maxResults: number | undefined }>,
+  stats: [] as string[],
 }));
 
 vi.mock('vscode', () => {
@@ -27,12 +30,15 @@ vi.mock('vscode', () => {
       workspaceFolders: undefined,
       fs: {
         stat: async (u: FakeUri) => {
-          if (h.dirs.has(u.fsPath)) return { type: 2 };
+          h.stats.push(u.fsPath);
+          if (h.dirs.has(u.fsPath)) return { type: 2, mtime: 0 };
+          const mtime = h.mtimes.get(u.fsPath);
+          if (mtime !== undefined) return { type: 1, mtime };
           throw new Error('ENOENT');
         },
       },
-      findFiles: async (pattern: { base: FakeUri }) => {
-        h.findCalls++;
+      findFiles: async (pattern: { base: FakeUri; pattern: string }, _exclude: unknown, maxResults?: number) => {
+        h.finds.push({ base: pattern.base.fsPath, pattern: pattern.pattern, maxResults });
         return (h.dirs.get(pattern.base.fsPath) ?? []).map(p => ({ scheme: 'file', fsPath: p }));
       },
       onDidChangeConfiguration: () => disposable,
@@ -43,6 +49,7 @@ vi.mock('vscode', () => {
         return {
           onDidCreate: (fn: (u: FakeUri) => void) => { w.create = fn; return disposable; },
           onDidChange: (fn: (u: FakeUri) => void) => { w.change = fn; return disposable; },
+          onDidDelete: () => disposable,
           dispose() {},
         };
       },
@@ -51,6 +58,7 @@ vi.mock('vscode', () => {
 });
 
 const { ReportWatcher } = await import('../../../src/vscode/reportWatcher');
+const { WorkspaceFileEvents } = await import('../../../src/vscode/fileEvents');
 
 const folder = (p: string, index: number) => ({ uri: { scheme: 'file', fsPath: p }, name: p.split('/').pop(), index });
 const FOLDERS = [folder('/w/one', 0), folder('/w/two', 1)];
@@ -67,12 +75,16 @@ let parse: ReturnType<typeof vi.fn<(reportPath: string, roots: readonly string[]
 let projects: Project[];
 let suppressed: Set<string>;
 let watcher: InstanceType<typeof ReportWatcher>;
+let events: InstanceType<typeof WorkspaceFileEvents>;
 
 beforeEach(() => {
   vi.useFakeTimers();
   h.watchers.length = 0;
   h.dirs.clear();
-  h.findCalls = 0;
+  h.mtimes.clear();
+  h.finds.length = 0;
+  h.stats.length = 0;
+  events = new WorkspaceFileEvents({ settingsOf: () => DEFAULT_SETTINGS, folders: () => FOLDERS as never });
   store = new CoverageStore();
   logs = [];
   projects = [];
@@ -88,12 +100,15 @@ beforeEach(() => {
     pythonSelection: () => undefined,
     fs: { readText: async () => undefined, exists: async () => false, find: async () => [] },
     log: msg => logs.push(msg),
+    events,
     folders: () => FOLDERS as never,
   });
+  events.start();
 });
 
 afterEach(() => {
   watcher.dispose();
+  events.dispose();
   vi.useRealTimers();
 });
 
@@ -105,6 +120,12 @@ function fire(path: string): void {
 function fireCreate(path: string): void {
   const w = h.watchers.find(x => path.startsWith(`${x.pattern.base.uri.fsPath}/`)) ?? h.watchers[0];
   w.create?.({ scheme: 'file', fsPath: path });
+}
+
+/** A file written now (its modification time). */
+function written(path: string, ageMs = 0): string {
+  h.mtimes.set(path, Date.now() - ageMs);
+  return path;
 }
 
 test('one watcher per folder is created, and nothing is read', () => {
@@ -187,18 +208,55 @@ test('a report inside a discovered project is stored under its key, and ignored 
   expect(logs).toEqual(['Loaded /w/one/web/coverage/lcov.info (1 file(s)).']);
 });
 
-test('a file that matches no report glob is ignored without any file access', async () => {
+test('a file that matches no report glob is not read; a created extension-less path costs one stat and no search', async () => {
   fire('/w/one/src/a.js');
   fire('/w/one/README');
   await vi.advanceTimersByTimeAsync(5_000);
   expect(parse).not.toHaveBeenCalled();
-  expect(h.findCalls).toBe(0);
+  expect(h.stats).toEqual(['/w/one/README']);
+  expect(h.finds).toEqual([]);
 });
 
-test('a folder created with reports already inside is searched, and its reports are loaded', async () => {
-  h.dirs.set('/w/one/coverage', ['/w/one/coverage/lcov.info', '/w/one/coverage/lcov-report/index.html']);
+test('a folder created with reports already inside is searched for report names only, and its reports are loaded', async () => {
+  h.dirs.set('/w/one/coverage', [written('/w/one/coverage/lcov.info'), written('/w/one/coverage/lcov-report/index.html')]);
   fire('/w/one/coverage');
-  await vi.advanceTimersByTimeAsync(750);
+  await vi.advanceTimersByTimeAsync(1_500);
   expect(parse.mock.calls.map(c => c[0])).toEqual(['/w/one/coverage/lcov.info']);
   expect(logs).toEqual(['Loaded /w/one/coverage/lcov.info (1 file(s)).']);
+  expect(h.finds).toHaveLength(1);
+  expect(h.finds[0].base).toBe('/w/one/coverage');
+  expect(h.finds[0].maxResults).toBe(50);
+  expect(h.finds[0].pattern).not.toContain('**/*}');
+  expect(h.finds[0].pattern).toContain('lcov.info');
+});
+
+test('folders created in one burst are searched once, from the outermost', async () => {
+  h.dirs.set('/w/one/out', [written('/w/one/out/coverage/lcov.info')]);
+  h.dirs.set('/w/one/out/coverage', [written('/w/one/out/coverage/lcov.info')]);
+  fire('/w/one/out');
+  fire('/w/one/out/coverage');
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(h.finds.map(f => f.base)).toEqual(['/w/one/out']);
+  expect(h.stats.filter(p => !p.endsWith('.info'))).toEqual(['/w/one/out']);
+  expect(parse).toHaveBeenCalledTimes(1);
+});
+
+test('a folder moved in with old reports does not load them', async () => {
+  h.dirs.set('/w/one/moved', [written('/w/one/moved/coverage/lcov.info', 5 * 60_000)]);
+  fire('/w/one/moved');
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(h.finds).toHaveLength(1);
+  expect(parse).not.toHaveBeenCalled();
+});
+
+test('a folder created in an excluded path or under .git is neither stat\'ed nor searched', async () => {
+  for (const p of ['/w/one/node_modules/pkg/coverage', '/w/one/.git/refs/heads/x', '/w/one/.git/FETCH_HEAD', '/w/one/sub/.git/objects/ab']) {
+    h.dirs.set(p, [written(`${p}/lcov.info`)]);
+    fire(p);
+  }
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(h.stats).toEqual([]);
+  expect(h.finds).toEqual([]);
+  expect(parse).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
 });

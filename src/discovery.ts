@@ -425,13 +425,21 @@ export function resolveTarget(p: string, isDirectory: boolean, state: DiscoveryS
 }
 
 /**
+ * A reader for `refreshFile`. With `kindOf` (one stat), the refreshed path is checked with it instead
+ * of `exists`, and a path that is a file is never searched as a directory moved in.
+ */
+export interface RefreshReader extends FsReader {
+  kindOf?(path: string): Promise<'file' | 'directory' | undefined>;
+}
+
+/**
  * Re-evaluates one created, changed or deleted path (a file, or a directory moved in or deleted)
  * that may be a test file of a discovered project, without a new discovery: a Node or Python test
  * file, or a `.cs` file inside a .NET test project. Paths outside every project, excluded or inside
  * a custom command directory change nothing. See `RefreshResult.rediscover` for what it leaves to
  * `discover`.
  */
-export async function refreshFile(state: DiscoveryState, file: string, fs: FsReader): Promise<RefreshResult> {
+export async function refreshFile(state: DiscoveryState, file: string, fs: RefreshReader): Promise<RefreshResult> {
   const ctx = internals.get(state);
   const rediscover = { state, rediscover: true };
   const unchanged = { state, rediscover: false };
@@ -444,7 +452,8 @@ export async function refreshFile(state: DiscoveryState, file: string, fs: FsRea
   if (settings === undefined || matchesAny(posixRel(folder, file), settings.exclude)) return unchanged;
   if (state.projects.some(p => p.ecosystem === 'custom' && atOrUnder(file, p.dir))) return unchanged;
 
-  const exists = await fs.exists(file);
+  const kind = fs.kindOf === undefined ? undefined : await fs.kindOf(file);
+  const exists = fs.kindOf === undefined ? await fs.exists(file) : kind !== undefined;
   // A deleted directory that held a solution.
   if (!exists && [...state.solutions.keys()].some(sln => atOrUnder(sln, file))) return rediscover;
   const owners = state.projects.filter(p => p.supportsPartial && owns(p, file, state.projects));
@@ -457,6 +466,8 @@ export async function refreshFile(state: DiscoveryState, file: string, fs: FsRea
       if (!ownedPythonTest(file)) return rediscover; // A new Python project may start here.
     } else if (!owners.some(isCandidate)) {
       // Not a file an owner could take: maybe a directory moved in, searched like a workspace folder.
+      // A file is not searched (with a reader that can tell).
+      if (fs.kindOf !== undefined && kind !== 'directory') return unchanged;
       const found = await findInFolder(fs, file, SCAN_GLOBS, folder, settings.exclude);
       const isPythonTest = (f: string) => matchesAny(path.basename(f), ['test_*.py', '*_test.py']);
       if (found.some(f => !isPythonTest(f) || !ownedPythonTest(f))) return rediscover;

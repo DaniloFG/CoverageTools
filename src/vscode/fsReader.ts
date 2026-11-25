@@ -2,10 +2,13 @@ import nodePath from 'node:path';
 import * as vscode from 'vscode';
 import type { FsReader } from '../adapters/types';
 import { globToRegExp, oneGlob } from '../glob';
+import { statKind } from './fileEvents';
 
 export interface VSCodeFsReader extends FsReader {
   /** A file's modification time, or undefined when it cannot be read; lets discovery cache `.cs` answers. */
   statMtime(path: string): Promise<number | undefined>;
+  /** What the path is, from one stat; undefined when it is gone or cannot be read. */
+  kindOf(path: string): Promise<'file' | 'directory' | undefined>;
 }
 
 const decoder = new TextDecoder('utf-8');
@@ -58,6 +61,10 @@ export function vscodeFsReader(): VSCodeFsReader {
         out.push(p);
       }
       return out.sort();
+    },
+
+    kindOf(p) {
+      return statKind(vscode.Uri.file(p));
     },
 
     async statMtime(p) {

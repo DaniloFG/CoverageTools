@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { expandBraces, globToRegExp, matchesAny, oneGlob } from '../../src/glob';
+import { expandBraces, globCacheSize, globToRegExp, matchesAny, oneGlob } from '../../src/glob';
 
 const m = (glob: string, path: string): boolean => globToRegExp(glob).test(path);
 
@@ -62,4 +62,15 @@ test('oneGlob joins globs into one brace group without nesting, for VS Code', ()
   expect(oneGlob(['**/*.csproj'])).toBe('**/*.csproj');
   expect(oneGlob(['**/*.csproj', '**/*.{js,ts}', '**/*.csproj'])).toBe('{**/*.csproj,**/*.js,**/*.ts}');
   expect(oneGlob([])).toBeUndefined();
+});
+
+test('a glob is compiled once: the same expression is reused by later calls', () => {
+  expect(globToRegExp('**/node_modules/**')).toBe(globToRegExp('**/node_modules/**'));
+  expect(globToRegExp('**/a\\b')).toBe(globToRegExp('**/a/b'));
+});
+
+test('matchesAny compiles each glob once, however many paths it is asked about', () => {
+  const before = globCacheSize();
+  for (let i = 0; i < 100; i++) matchesAny(`src/f${i}.ts`, ['**/memo-probe-a/**', '**/memo-probe-b/**']);
+  expect(globCacheSize() - before).toBe(2);
 });
