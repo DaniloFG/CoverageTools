@@ -110,7 +110,7 @@ jobs:
           fi
           echo "configured=true" >> "$GITHUB_OUTPUT"
           set +e
-          OUT=$(npx vsce publish --no-yarn --packagePath release/coverage-tools-"$VERSION".vsix 2>&1)
+          OUT=$(npx --no-install vsce publish --no-yarn --packagePath release/coverage-tools-"$VERSION".vsix 2>&1)
           CODE=$?
           set -e
           echo "$OUT"
@@ -133,7 +133,7 @@ jobs:
             exit 0
           fi
           set +e
-          OUT=$(npx ovsx publish release/coverage-tools-"$VERSION".vsix -p "$OVSX_PAT" 2>&1)
+          OUT=$(npx --no-install ovsx publish release/coverage-tools-"$VERSION".vsix -p "$OVSX_PAT" 2>&1)
           CODE=$?
           set -e
           echo "$OUT"
@@ -143,14 +143,15 @@ jobs:
             exit "$CODE"
           fi
 
-      # On a tag, attaches to that tag's release; on a new publication from main, or when VSCE_PAT is not
-      # configured (then the release is the only place the .vsix ships), creates the v<version> release.
-      # Skipped only when the version was already on the Marketplace: no new version came out.
+      # On a tag push, attaches to that tag's release; on a new publication from main or a manual run, or when
+      # VSCE_PAT is not configured (then the release is the only place the .vsix ships), creates the v<version>
+      # release. Skipped only when the version was already on the Marketplace: no new version came out.
+      # A manual run always uses v<version>, even when started from a tag: its version may differ from the tag's.
       - name: Attach the .vsix to the release
-        if: github.ref_type == 'tag' || steps.marketplace.outputs.published == 'true' || steps.marketplace.outputs.configured == 'false'
+        if: (github.event_name == 'push' && github.ref_type == 'tag') || steps.marketplace.outputs.published == 'true' || steps.marketplace.outputs.configured == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          tag_name: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}
           target_commitish: ${{ github.sha }}
           files: release/*.vsix
           # The body is the CHANGELOG section written above; never generated from PR or commit titles.

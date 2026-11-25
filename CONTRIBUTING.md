@@ -8,8 +8,14 @@ npm run lint      # type-check and ESLint
 npm run build     # bundle dist/extension.js and dist/worker.js
 npm test          # unit tests
 npm run test:e2e  # real tools on samples/ (run `node scripts/setup-samples.mjs` first)
+npm run test:perf # the lightness budgets on the built bundle
 npm run test:ui   # real VS Code driven by Playwright (needs a display; use xvfb-run on Linux)
+npm run package   # release/coverage-tools-<version>.vsix
 ```
+
+Node.js 22 is used everywhere (CI and the publishing workflow). CI runs lint, build, the bundle
+size check and the unit tests on Linux, Windows and macOS; the end-to-end, performance and UI
+tests and the packaging run on Linux.
 
 ## Publishing
 
@@ -18,7 +24,10 @@ Marketplace publisher (`DaniloFG`), so both extensions live on the same publishe
 
 ### Build the `.vsix` locally
 
-`npm run package` builds the extension and writes `release/coverage-tools-<version>.vsix`.
+`npm run package` builds the extension and writes `release/coverage-tools-<version>.vsix`
+(`release/` is git-ignored). The package holds the bundle (`dist/*.js`), the production
+dependencies (the bundled `c8` and its dependencies), the icon, `README.md`, `CHANGELOG.md`,
+`LICENSE` and `package.json`; the README's links and images point at this repository.
 Install it with `code --install-extension release/coverage-tools-<version>.vsix`, or in VS Code
 with **Extensions: Install from VSIX...**. `npm run build` only compiles.
 
@@ -34,7 +43,8 @@ automatically. It runs:
 - **when a `v*` tag is pushed** (`git tag v0.5.1 && git push origin v0.5.1`), with the version
   of the tag;
 - **manually**, from *Actions → Publish VS Code extension → Run workflow*, with an optional
-  version.
+  version. A manual run always releases under the tag `v<version>`, even when it is started
+  from a tag.
 
 Only one publication runs at a time; a second one waits for the first instead of cancelling it.
 
@@ -57,7 +67,11 @@ publishes a "Maintenance release." note, while a tag or a manual run fails until
 says what users get.
 
 Every new publication creates the GitHub release `v<version>` with the `.vsix` attached, and
-the `.vsix` is also kept as the `coverage-tools-vsix` artifact of the run.
+the `.vsix` is also kept as the `coverage-tools-vsix` artifact of the run. If a release is
+missing after a successful Marketplace publish, push the tag `v<version>` by hand.
+
+`vsce` and `ovsx` are pinned in `devDependencies` and run with `npx --no-install`, so a
+publication never downloads a different version of either tool.
 
 ### One-time setup
 

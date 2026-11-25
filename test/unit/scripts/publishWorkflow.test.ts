@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { parse } from 'yaml';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const WORKFLOW = path.join(ROOT, '.github/workflows/publish-extension.yml');
@@ -34,23 +35,9 @@ interface Workflow {
   jobs: Record<string, Job>;
 }
 
-function loadWorkflow(): Workflow {
-  const json = execFileSync(
-    'python3',
-    ['-c', 'import yaml, json, sys; print(json.dumps(yaml.safe_load(open(sys.argv[1]))))', WORKFLOW],
-    { encoding: 'utf8' },
-  );
-  const parsed = JSON.parse(json) as Record<string, unknown>;
-  // YAML 1.1 reads the bare key `on` as the boolean true, which JSON writes as "true".
-  if (!('on' in parsed) && 'true' in parsed) {
-    parsed.on = parsed.true;
-    delete parsed.true;
-  }
-  return parsed as unknown as Workflow;
-}
-
 const text = readFileSync(WORKFLOW, 'utf8');
-const workflow = loadWorkflow();
+// YAML 1.2 (the `yaml` package's default) keeps the bare key `on` a string, as GitHub reads it.
+const workflow = parse(text) as Workflow;
 const steps = workflow.jobs.publish.steps;
 
 function stepNamed(fragment: string): Step {
@@ -155,23 +142,32 @@ test('the Marketplace and Open VSX steps publish release/coverage-tools-<version
   const marketplace = stepNamed('Marketplace');
   expect(marketplace.id).toBe('marketplace');
   expect(marketplace.run).toContain(
-    'npx vsce publish --no-yarn --packagePath release/coverage-tools-"$VERSION".vsix',
+    'npx --no-install vsce publish --no-yarn --packagePath release/coverage-tools-"$VERSION".vsix',
   );
   for (const output of ['published=true', 'published=false', 'configured=true', 'configured=false']) {
     expect(marketplace.run).toContain(`echo "${output}" >> "$GITHUB_OUTPUT"`);
   }
   expect(marketplace.run).toMatch(/already exists/);
-  expect(stepNamed('Open VSX').run).toContain('npx ovsx publish release/coverage-tools-"$VERSION".vsix -p "$OVSX_PAT"');
+  expect(stepNamed('Open VSX').run).toContain('npx --no-install ovsx publish release/coverage-tools-"$VERSION".vsix -p "$OVSX_PAT"');
 });
 
-test('the release step runs on a tag, after a Marketplace publish, or when VSCE_PAT is absent', () => {
+test('vsce and ovsx are pinned devDependencies, run without fetching anything', () => {
+  const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as { devDependencies: Record<string, string> };
+  expect(Object.keys(pkg.devDependencies)).toEqual(expect.arrayContaining(['@vscode/vsce', 'ovsx']));
+  const npx = text.split('\n').filter((line) => /\bnpx\b/.test(line));
+  expect(npx.length).toBe(2);
+  for (const line of npx) expect(line).toMatch(/npx --no-install (vsce|ovsx) /);
+});
+
+test('the release step runs on a tag push, after a Marketplace publish, or when VSCE_PAT is absent', () => {
   const release = steps.find((s) => s.uses === 'softprops/action-gh-release@v2');
   const condition = release?.if?.replace(/\s+/g, ' ').trim();
   expect(condition).toBe(
-    "github.ref_type == 'tag' || steps.marketplace.outputs.published == 'true' || steps.marketplace.outputs.configured == 'false'",
+    "(github.event_name == 'push' && github.ref_type == 'tag') || steps.marketplace.outputs.published == 'true' || steps.marketplace.outputs.configured == 'false'",
   );
+  // Only a tag push uses the pushed tag; a manual run (even started from a tag) releases v<its version>.
   expect(release?.with).toEqual({
-    tag_name: "${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}",
+    tag_name: "${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.version.outputs.version) }}",
     target_commitish: '${{ github.sha }}',
     files: 'release/*.vsix',
     generate_release_notes: false,
@@ -184,7 +180,8 @@ test('the .vsix is kept as the coverage-tools-vsix artifact', () => {
   expect(upload?.with).toEqual({ name: 'coverage-tools-vsix', path: 'release/*.vsix' });
 });
 
-describe('the version step, run in a scratch git repository', () => {
+// The publish job runs on ubuntu-latest, so its bash script is only run where a POSIX shell and tools are.
+describe.skipIf(process.platform === 'win32')('the version step, run in a scratch git repository', () => {
   let repo: string;
 
   beforeAll(() => {
