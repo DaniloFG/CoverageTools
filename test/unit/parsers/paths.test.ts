@@ -22,27 +22,27 @@ test.each([
   ['deterministic build prefix /_/', '/_/src/a.cs', [], '/w/src/a.cs'],
   ['path with spaces and accents', 'meu código/a.cs', ['/w'], '/w/meu código/a.cs'],
 ])('%s', (_n, raw, sources, expected) => {
-  expect(resolveReportPath(raw, sources, ctx)).toBe(expected);
+  expect(resolveReportPath(raw, sources, ctx, path.posix)).toBe(expected);
 });
 
 test('a <source> is tried before the report directory and the roots', () => {
   const c = ctxOf(['/s/a.cs', '/w/TestResults/x/a.cs', '/w/a.cs'], '/w/TestResults/x', ['/w']);
-  expect(resolveReportPath('a.cs', ['/missing', '/s'], c)).toBe('/s/a.cs');
+  expect(resolveReportPath('a.cs', ['/missing', '/s'], c, path.posix)).toBe('/s/a.cs');
 });
 
 test('a deterministic <source> maps to the workspace roots', () => {
   const c = ctxOf(['/w/proj/src/a.cs'], '/r', ['/w']);
-  expect(resolveReportPath('src/a.cs', ['/_/proj/'], c)).toBe('/w/proj/src/a.cs');
+  expect(resolveReportPath('src/a.cs', ['/_/proj/'], c, path.posix)).toBe('/w/proj/src/a.cs');
 });
 
 test('numbered deterministic prefixes /_1/, /_2/ and bare /_/ sources map to the workspace roots', () => {
   const c = ctxOf(['/w/src/a.cs', '/w/lib/b.cs'], '/r', ['/w']);
-  expect(resolveReportPath('/_1/src/a.cs', [], c)).toBe('/w/src/a.cs');
-  expect(resolveReportPath('/_12/lib/b.cs', [], c)).toBe('/w/lib/b.cs');
-  expect(resolveReportPath('src/a.cs', ['/_/'], c)).toBe('/w/src/a.cs');
-  expect(resolveReportPath('src/a.cs', ['/_'], c)).toBe('/w/src/a.cs');
-  expect(resolveReportPath('lib/b.cs', ['/_3/'], c)).toBe('/w/lib/b.cs');
-  expect(resolveReportPath('/_x/src/a.cs', [], c)).toBeUndefined();
+  expect(resolveReportPath('/_1/src/a.cs', [], c, path.posix)).toBe('/w/src/a.cs');
+  expect(resolveReportPath('/_12/lib/b.cs', [], c, path.posix)).toBe('/w/lib/b.cs');
+  expect(resolveReportPath('src/a.cs', ['/_/'], c, path.posix)).toBe('/w/src/a.cs');
+  expect(resolveReportPath('src/a.cs', ['/_'], c, path.posix)).toBe('/w/src/a.cs');
+  expect(resolveReportPath('lib/b.cs', ['/_3/'], c, path.posix)).toBe('/w/lib/b.cs');
+  expect(resolveReportPath('/_x/src/a.cs', [], c, path.posix)).toBeUndefined();
 });
 
 test('Windows: numbered deterministic prefixes with backslashes', () => {
@@ -53,34 +53,34 @@ test('Windows: numbered deterministic prefixes with backslashes', () => {
 
 test('with two roots that both have the file, the root holding the report wins', () => {
   const c = ctxOf(['/a/src/calc.js', '/b/src/calc.js'], '/b/coverage', ['/a', '/b']);
-  expect(resolveReportPath('src/calc.js', [], c)).toBe('/b/src/calc.js');
+  expect(resolveReportPath('src/calc.js', [], c, path.posix)).toBe('/b/src/calc.js');
 });
 
 test('a report below a root resolves from its own project directory upward', () => {
   const c = ctxOf(['/w/src/a.js', '/w/packages/app/src/a.js', '/w/packages/app/only-here.js', '/w/top.js'],
     '/w/packages/app/coverage', ['/w']);
-  expect(resolveReportPath('src/a.js', [], c)).toBe('/w/packages/app/src/a.js');
-  expect(resolveReportPath('only-here.js', [], c)).toBe('/w/packages/app/only-here.js');
-  expect(resolveReportPath('top.js', [], c)).toBe('/w/top.js');
+  expect(resolveReportPath('src/a.js', [], c, path.posix)).toBe('/w/packages/app/src/a.js');
+  expect(resolveReportPath('only-here.js', [], c, path.posix)).toBe('/w/packages/app/only-here.js');
+  expect(resolveReportPath('top.js', [], c, path.posix)).toBe('/w/top.js');
 });
 
 test('the upward walk stops at the innermost root that contains the report', () => {
   const c = ctxOf(['/w/x.js', '/other/x.js'], '/w/inner/coverage', ['/other', '/w/inner', '/w']);
   // /w is not an ancestor tried before the roots: the walk stops at /w/inner, then roots go in order.
-  expect(resolveReportPath('x.js', [], c)).toBe('/other/x.js');
+  expect(resolveReportPath('x.js', [], c, path.posix)).toBe('/other/x.js');
 });
 
 test('a report outside every root: the first root that has the file wins', () => {
   const c = ctxOf(['/a/src/calc.js', '/b/src/calc.js'], '/tmp/run-1/coverage', ['/b', '/a']);
-  expect(resolveReportPath('src/calc.js', [], c)).toBe('/b/src/calc.js');
+  expect(resolveReportPath('src/calc.js', [], c, path.posix)).toBe('/b/src/calc.js');
   const deep = ctxOf(['/src/calc.js', '/a/src/calc.js'], '/1/2/3/4/5/6/7/8/9/10', ['/a']);
   // Only 8 ancestors are tried outside the roots, so the filesystem root is not reached.
-  expect(resolveReportPath('src/calc.js', [], deep)).toBe('/a/src/calc.js');
+  expect(resolveReportPath('src/calc.js', [], deep, path.posix)).toBe('/a/src/calc.js');
 });
 
 test('deterministic remainders are tried from the report directory upward before the roots', () => {
   const c = ctxOf(['/a/src/a.cs', '/b/proj/src/a.cs'], '/b/proj/TestResults/x', ['/a', '/b']);
-  expect(resolveReportPath('/_/src/a.cs', [], c)).toBe('/b/proj/src/a.cs');
+  expect(resolveReportPath('/_/src/a.cs', [], c, path.posix)).toBe('/b/proj/src/a.cs');
 });
 
 test('Windows: the root holding the report wins and a nested project resolves upward', () => {
@@ -92,9 +92,9 @@ test('Windows: the root holding the report wins and a nested project resolves up
 });
 
 test('a path that exists nowhere resolves to undefined', () => {
-  expect(resolveReportPath('src/missing.cs', ['/w'], ctx)).toBeUndefined();
-  expect(resolveReportPath('/elsewhere/missing.cs', [], ctx)).toBeUndefined();
-  expect(resolveReportPath('/_/missing.cs', [], ctx)).toBeUndefined();
+  expect(resolveReportPath('src/missing.cs', ['/w'], ctx, path.posix)).toBeUndefined();
+  expect(resolveReportPath('/elsewhere/missing.cs', [], ctx, path.posix)).toBeUndefined();
+  expect(resolveReportPath('/_/missing.cs', [], ctx, path.posix)).toBeUndefined();
 });
 
 test('Windows: backslashes and drive-letter case are normalized', () => {

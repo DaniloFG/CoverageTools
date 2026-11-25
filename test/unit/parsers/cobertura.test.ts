@@ -10,7 +10,7 @@ const read = (name: string) => readFileSync(path.join(FIXTURES, name), 'utf8');
 
 function ctxOf(existing: readonly string[], roots: readonly string[] = ['/w']): ParseContext {
   const set = new Set(existing);
-  return { reportDir: '/w/TestResults/x', roots, fileExists: p => set.has(p) };
+  return { reportDir: '/w/TestResults/x', roots, fileExists: p => set.has(p), path: path.posix };
 }
 
 const ctx = ctxOf([

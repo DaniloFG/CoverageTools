@@ -80,7 +80,7 @@ export function resolveReportPath(
   raw: string,
   sources: readonly string[],
   ctx: ParseContext,
-  pathImpl: PathImpl = nodePath,
+  pathImpl: PathImpl = ctx.path ?? nodePath,
 ): string | undefined {
   const exists = (p: string): string | undefined => {
     const n = normalize(p, pathImpl);

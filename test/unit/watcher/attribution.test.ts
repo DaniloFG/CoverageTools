@@ -25,7 +25,7 @@ test('Windows paths are attributed case-insensitively', () => {
   expect(ownerOf('C:/Work/API/coverage/lcov.info', projects, win)!.dir).toBe('C:\\Work\\Api');
   expect(ownerOf('C:\\Work\\Api2\\coverage\\lcov.info', projects, win)).toBeUndefined();
   // POSIX paths stay case-sensitive.
-  expect(ownerOf('/w/API/coverage/lcov.info', [p('/w/api')])).toBeUndefined();
+  expect(ownerOf('/w/API/coverage/lcov.info', [p('/w/api')], nodePath.posix)).toBeUndefined();
 });
 
 test('isWithin accepts the directory itself and its descendants only', () => {

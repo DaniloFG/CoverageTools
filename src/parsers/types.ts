@@ -11,6 +11,11 @@ export interface ParseContext {
   /** Workspace folder roots; relative paths are tried against each. */
   roots: readonly string[];
   fileExists(p: string): boolean;
+  /**
+   * The path rules report paths are resolved with; the platform's when omitted. Tests set
+   * `path.posix` or `path.win32` to check either OS's rules on any machine.
+   */
+  path?: typeof import('node:path').posix;
 }
 
 export interface ParsedReport {

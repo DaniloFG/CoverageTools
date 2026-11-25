@@ -1,3 +1,4 @@
+import nodePath from 'node:path';
 import { FileBuilder, type FileCoverageData } from '../../src/model';
 
 /** Builds a file with line-only statements from `[line, count]` pairs. */
@@ -31,4 +32,12 @@ export function declRanges(f: FileCoverageData): Array<[string, number, number, 
   const d = f.declarations;
   for (let i = 0; i < d.length; i += 6) out.push([f.names[d[i + 5]], d[i], d[i + 1], d[i + 2], d[i + 3], d[i + 4]]);
   return out;
+}
+
+/**
+ * A POSIX-style absolute fixture path (`/w/src/a.ts`) as this OS writes it: unchanged on Linux and
+ * macOS, `D:\w\src\a.ts` on Windows, like the `fsPath` VS Code gives there.
+ */
+export function nativePath(posixPath: string): string {
+  return nodePath.resolve(posixPath);
 }

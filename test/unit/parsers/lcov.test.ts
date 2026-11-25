@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { expect, test } from 'vitest';
 import { EOL } from '../../../src/model';
 import { parseLcov } from '../../../src/parsers/lcov';
@@ -6,7 +7,7 @@ import { decls, lines } from '../helpers';
 
 function ctxOf(existing: readonly string[]): ParseContext {
   const set = new Set(existing);
-  return { reportDir: '/w/coverage', roots: ['/w'], fileExists: p => set.has(p) };
+  return { reportDir: '/w/coverage', roots: ['/w'], fileExists: p => set.has(p), path: path.posix };
 }
 
 const ctx = ctxOf(['/w/src/a.js', '/w/src/b.js']);
@@ -104,6 +105,7 @@ test('with two roots, a relative SF resolves into the root that holds the report
     reportDir: '/w/samples/node-nyc/coverage',
     roots: ['/w/samples/node-mocha', '/w/samples/node-nyc'],
     fileExists: p => p === '/w/samples/node-mocha/src/calc.js' || p === '/w/samples/node-nyc/src/calc.js',
+    path: path.posix,
   };
   const r = parseLcov('SF:src/calc.js\nDA:1,1\nend_of_record\n', c);
   expect(r.files.map(f => f.path)).toEqual(['/w/samples/node-nyc/src/calc.js']);
