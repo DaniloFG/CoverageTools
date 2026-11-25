@@ -604,7 +604,8 @@ test('resolveTarget on a directory with nested projects also runs the tests of t
   const [jest, py] = state.projects;
   expect(resolveTarget(at(root, 'scripts'), true, state)).toEqual([
     { project: py, target: { kind: 'full' } },
-    { project: jest, target: { kind: 'partial', paths: [at(root, 'scripts')] } },
+    // A project lies under the directory, so the enclosing project gets its owned files there.
+    { project: jest, target: { kind: 'partial', paths: [at(root, 'scripts/foo.test.js')] } },
   ]);
 });
 
@@ -679,4 +680,141 @@ test('refreshFile keeps the spelling of a known path and normalizes a new one', 
   const next = (await refreshFile(state, odd('b.test.js'), fs)).state;
   expect(next.testFiles.get(key)).toEqual([at(root, 'web/a.test.js'), at(root, 'web/b.test.js')]);
   expect(next.runnablePaths.has(at(root, 'web/b.test.js'))).toBe(true);
+});
+
+test('Python tests under a custom directory never make a Python project outside it', async () => {
+  const files = { 'package.json': JEST('web'), 'a.test.js': '', 'tools/test_x.py': PY_TEST };
+  const commands = { tools: 'make t' };
+  const root = await tree(files);
+  expect(summary(await run([root], settings({ commands })), root)).toEqual([
+    ['jest', '.'],
+    ['custom', 'tools'],
+  ]);
+  // With a test file of its own, the root Python project exists, without the file of the custom directory.
+  const withOwn = await tree({ ...files, 'tests/test_y.py': PY_TEST });
+  const state = await run([withOwn], settings({ commands }));
+  expect(summary(state, withOwn)).toEqual([
+    ['jest', '.'],
+    ['python', '.'],
+    ['custom', 'tools'],
+  ]);
+  expect(state.testFiles.get(state.projects[1].key)).toEqual([at(withOwn, 'tests/test_y.py')]);
+  expect(state.runnablePaths.has(at(withOwn, 'tools/test_x.py'))).toBe(false);
+});
+
+test('a directory holding a custom directory runs only the enclosing project\'s own test files there', async () => {
+  const root = await tree({
+    'package.json': JEST('web'),
+    'scripts/foo.test.js': '',
+    'scripts/c/c.test.js': '',
+    'pyproject.toml': '',
+    'scripts/test_s.py': PY_TEST,
+    'scripts/c/test_c.py': PY_TEST,
+  });
+  const state = await run([root], settings({ commands: { 'scripts/c': 'make c' } }));
+  const [jest, py, custom] = state.projects;
+  expect([jest.adapter, py.adapter, custom.adapter]).toEqual(['jest', 'python', 'custom']);
+  expect(resolveTarget(at(root, 'scripts'), true, state)).toEqual([
+    { project: custom, target: { kind: 'full' } },
+    { project: jest, target: { kind: 'partial', paths: [at(root, 'scripts/foo.test.js')] } },
+    { project: py, target: { kind: 'partial', paths: [at(root, 'scripts/test_s.py')] } },
+  ]);
+  // A directory inside a project with no project under it is passed as is: everything the adapter
+  // finds under it belongs to that project.
+  const flat = await tree({ 'package.json': JEST('web'), 'src/x/a.test.js': '', 'src/x/b.test.js': '' });
+  const flatState = await run([flat]);
+  expect(flatState.projects.filter(p => atOrInside(p.dir, at(flat, 'src/x')))).toEqual([]);
+  expect(resolveTarget(at(flat, 'src/x'), true, flatState)).toEqual([
+    { project: flatState.projects[0], target: { kind: 'partial', paths: [at(flat, 'src/x')] } },
+  ]);
+});
+
+function atOrInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+test('nested custom directories: only the outermost runs', async () => {
+  const root = await tree({ 'packages/a/package.json': JEST('a'), 'packages/a/a.test.js': '' });
+  const state = await run([root], settings({ commands: { '.': 'make all', 'packages/a': 'make a' } }));
+  expect(summary(state, root)).toEqual([['custom', '.']]);
+  expect(state.projects[0].meta.command).toBe('make all');
+});
+
+test('a custom command in an outer workspace folder suppresses the projects of a folder nested in its directory', async () => {
+  const outer = await tree({ 'inner/app/package.json': JEST('app'), 'web/package.json': JEST('web') });
+  const inner = at(outer, 'inner');
+  const byFolder = new Map([[outer, settings({ commands: { inner: 'make inner' } })], [inner, settings()]]);
+  const state = await run([outer, inner], f => byFolder.get(f) ?? settings());
+  expect(state.projects.map(p => [p.adapter, p.dir])).toEqual([
+    ['custom', inner],
+    ['jest', at(outer, 'web')],
+  ]);
+});
+
+test('excludes are relative to the workspace folder, in discover and in refreshFile', async () => {
+  const root = await tree({
+    'web/package.json': JEST('web'),
+    'web/a.test.js': '',
+    'web/build/gen.test.js': '',
+  });
+  const s = settings({ exclude: [...DEFAULT_SETTINGS.exclude, 'web/build/**', 'web/more/build/**'] });
+  const fs = nodeFsReader();
+  const state = await run([root], s, fs);
+  expect(state.testFiles.get(state.projects[0].key)).toEqual([at(root, 'web/a.test.js')]);
+  await writeFile(at(root, 'web/build/gen2.test.js'), '');
+  expect(await refreshFile(state, at(root, 'web/build/gen2.test.js'), fs)).toEqual({ state, rediscover: false });
+  // A directory moved in: its own build/ is excluded relative to the folder, not to the directory.
+  await mkdir(at(root, 'web/more/build'), { recursive: true });
+  await writeFile(at(root, 'web/more/m.test.js'), '');
+  await writeFile(at(root, 'web/more/build/x.test.js'), '');
+  await mkdir(at(root, 'web/other/web/more/build'), { recursive: true });
+  await writeFile(at(root, 'web/other/web/more/build/kept.test.js'), '');
+  const next = (await refreshFile(state, at(root, 'web/more'), fs)).state;
+  expect(next.testFiles.get(state.projects[0].key)).toEqual([at(root, 'web/a.test.js'), at(root, 'web/more/m.test.js')]);
+  const other = (await refreshFile(next, at(root, 'web/other'), fs)).state;
+  expect(other.testFiles.get(state.projects[0].key)).toContain(at(root, 'web/other/web/more/build/kept.test.js'));
+});
+
+test('walkthrough: a custom command on the root replaces the inner Jest packages', async () => {
+  const root = await tree({
+    'package.json': JSON.stringify({ name: 'mono', scripts: { test: 'yarn workspaces run test' } }),
+    'packages/a/package.json': JEST('a'),
+    'packages/b/package.json': JEST('b'),
+  });
+  const state = await run([root], settings({ commands: { '.': 'yarn cov' } }));
+  expect(summary(state, root)).toEqual([['custom', '.']]);
+  expect(resolveTarget(root, true, state).map(t => t.project.adapter)).toEqual(['custom']);
+});
+
+test('walkthrough: a custom command on a directory with two inner projects drops both', async () => {
+  const root = await tree({
+    'package.json': JSON.stringify({ name: 'root' }),
+    'packages/a/package.json': JEST('a'),
+    'packages/b/setup.py': '',
+    'packages/b/test_b.py': PY_TEST,
+    'other/package.json': VITEST('other'),
+  });
+  const state = await run([root], settings({ commands: { packages: 'make cov' } }));
+  expect(summary(state, root)).toEqual([
+    ['vitest', 'other'],
+    ['custom', 'packages'],
+  ]);
+});
+
+test('walkthrough (known limitation): a custom command on a directory that is not a project keeps the enclosing project, whose full run still covers that directory', async () => {
+  const root = await tree({
+    'package.json': JEST('web'),
+    'src/a.test.js': '',
+    'legacy/l.test.js': '',
+  });
+  const state = await run([root], settings({ commands: { legacy: 'make legacy' } }));
+  expect(summary(state, root)).toEqual([
+    ['jest', '.'],
+    ['custom', 'legacy'],
+  ]);
+  // Not offered for partial runs of the enclosing project...
+  expect(state.testFiles.get(state.projects[0].key)).toEqual([at(root, 'src/a.test.js')]);
+  // ...but its full run (Jest over the whole project) still runs legacy/l.test.js.
+  expect(resolveTarget(at(root, 'package.json'), false, state)).toEqual([{ project: state.projects[0], target: { kind: 'full' } }]);
 });

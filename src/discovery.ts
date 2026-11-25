@@ -66,8 +66,8 @@ const DOTNET_BUILD_OUTPUT = ['**/bin/**', '**/obj/**'];
 const NESTING = new Set<Ecosystem>(['node', 'python']);
 /** `.cs` files read at once before the event loop gets control back. */
 const BATCH = 20;
-/** Files whose change can add, remove or change a project: `refreshFile` asks for a new discovery. */
-const MARKER_FILE =
+/** Files (base names) whose change can add, remove or change a project: `refreshFile` asks for a new discovery. */
+export const MARKER_FILE =
   /^(?:.*\.(?:csproj|sln|slnx)|package\.json|pyproject\.toml|setup\.py|setup\.cfg|pytest\.ini|tox\.ini|global\.json|directory\.build\.props|directory\.packages\.props|directory\.build\.targets|(?:jest|vitest|vite)\.config\.[^.]+|\.mocharc\.[^.]+)$/i;
 
 const CASE_INSENSITIVE = process.platform === 'win32';
@@ -185,6 +185,19 @@ function folderOf(project: Project): string {
   return typeof project.meta.workspaceFolder === 'string' ? project.meta.workspaceFolder : project.dir;
 }
 
+/**
+ * Searches `dir` (inside `folder`) the way the folder search would: `exclude` is matched against
+ * paths relative to the workspace folder. Only the globs that match the same way wherever they are
+ * applied (those that start with a double-star segment) prune the walk; the others filter its results.
+ */
+async function findInFolder(
+  fs: FsReader, dir: string, include: readonly string[], folder: string, exclude: readonly string[],
+): Promise<string[]> {
+  const prune = exclude.filter(g => g.startsWith('**/'));
+  const found = await fs.find(dir, include, prune);
+  return found.filter(f => !matchesAny(posixRel(folder, f), exclude));
+}
+
 function excludesFor(project: Project, settings: Settings): string[] {
   return project.ecosystem === 'dotnet' ? [...DOTNET_BUILD_OUTPUT, ...settings.exclude] : settings.exclude;
 }
@@ -277,12 +290,9 @@ export async function discover(
   /** Per folder: its custom projects and what the adapters found there, after the nesting rule. */
   const perFolder: Array<{ custom: Project[]; found: Project[] }> = [];
 
+  const customsOf = new Map<string, Project[]>();
   for (const folder of folders) {
     const settings = ctx.settings.get(folder) ?? settingsOf(folder);
-    const scanned = await fs.find(folder, SCAN_GLOBS, settings.exclude);
-    const files = scanned.filter(f => innermostFolder(f, folders) === folder);
-    reader.scans.push({ folder, files });
-
     const custom: Project[] = [];
     for (const [rel, command] of Object.entries(settings.commands)) {
       if (typeof command !== 'string' || command.trim() === '') continue;
@@ -290,6 +300,20 @@ export async function discover(
       if (!atOrUnder(dir, folder) || !(await reader.exists(dir))) continue;
       custom.push(customProject(dir, command, folder));
     }
+    customsOf.set(folder, custom);
+  }
+  // Only the outermost custom directories count: an outer command runs everything inside it, a
+  // nested one included (also one from a workspace folder nested inside it).
+  const allCustom = [...customsOf.values()].flat();
+  const customDirs = allCustom.filter(c => !allCustom.some(d => strictlyUnder(c.dir, d.dir))).map(c => c.dir);
+  const inCustom = (p: string) => customDirs.some(d => atOrUnder(p, d));
+
+  for (const folder of folders) {
+    const settings = ctx.settings.get(folder) ?? settingsOf(folder);
+    const scanned = await fs.find(folder, SCAN_GLOBS, settings.exclude);
+    const files = scanned.filter(f => innermostFolder(f, folders) === folder);
+    reader.scans.push({ folder, files });
+    const custom = (customsOf.get(folder) ?? []).filter(c => customDirs.some(d => samePath(d, c.dir)));
 
     const found: Project[] = [];
     const markerDirs = new Set<string>();
@@ -310,8 +334,12 @@ export async function discover(
     }
     for (const file of files) {
       if (!matchesAny(path.basename(file), ['test_*.py', '*_test.py'])) continue;
-      pythonTests.push(file);
       const dir = pythonProjectDir(path.dirname(file), folder, markerDirs);
+      // A test file under a custom directory only makes a project inside that directory (which the
+      // command then replaces): never one outside it, which would run the file a second time.
+      const custom = customDirs.find(d => atOrUnder(file, d));
+      if (custom !== undefined && !atOrUnder(dir, custom)) continue;
+      if (custom === undefined) pythonTests.push(file);
       pyTestDirs.set(cmp(dir), dir);
     }
     for (const dir of pyTestDirs.values()) {
@@ -324,11 +352,10 @@ export async function discover(
 
   // Custom commands replace what they cover only after the nesting rule, so that an orchestrator
   // dropped for the projects inside it stays dropped when one of them gets a custom command.
-  const customDirs = perFolder.flatMap(f => f.custom.map(c => c.dir));
   const projects: Project[] = [];
   const seen = new Set<string>();
   for (const { custom, found } of perFolder) {
-    const kept = found.filter(p => !customDirs.some(d => atOrUnder(p.dir, d)));
+    const kept = found.filter(p => !inCustom(p.dir));
     for (const p of [...custom, ...kept].sort(byDir)) {
       const key = CASE_INSENSITIVE ? p.key.toLowerCase() : p.key;
       if (seen.has(key)) continue;
@@ -347,7 +374,7 @@ export async function discover(
     if (globs === undefined) continue;
     const candidates = project.ecosystem === 'python'
       ? pythonTests.filter(f => strictlyUnder(f, project.dir))
-      : await fs.find(project.dir, globs, excludesFor(project, settings));
+      : await findInFolder(fs, project.dir, globs, folderOf(project), excludesFor(project, settings));
     const mine = candidates.filter(f => owns(project, f, projects));
     testFiles.set(project.key, (await filterTestFiles(adapter, project, mine, fs, ctx)).sort());
   }
@@ -368,12 +395,13 @@ export async function discover(
  * What "Run Coverage Here" runs for an Explorer path; empty when the path is not eligible.
  * A file: the project it defines, else every test project of the solution it is, else a partial run
  * of each project it is a test file of. A directory: a full run of every project at or under it (the
- * workspace folder root: every project of the folder), plus a partial run, restricted to the
- * directory, of each project it is inside of that has test files under it.
+ * workspace folder root: every project of the folder), plus a partial run of each project it is
+ * inside of that has test files under it: of the directory when no project lies under it, else of
+ * the test files that project owns there.
  */
 export function resolveTarget(p: string, isDirectory: boolean, state: DiscoveryState): Array<{ project: Project; target: RunTarget }> {
   const full = (project: Project) => ({ project, target: { kind: 'full' } as RunTarget });
-  const partial = (project: Project) => ({ project, target: { kind: 'partial', paths: [p] } as RunTarget });
+  const partial = (project: Project, paths: readonly string[] = [p]) => ({ project, target: { kind: 'partial', paths } as RunTarget });
   const filesOf = (project: Project) => state.testFiles.get(project.key) ?? [];
   if (!isDirectory) {
     const defined = state.projects.filter(x => x.definingFile !== undefined && samePath(x.definingFile, p));
@@ -381,13 +409,19 @@ export function resolveTarget(p: string, isDirectory: boolean, state: DiscoveryS
     for (const [sln, keys] of state.solutions) {
       if (samePath(sln, p)) return keys.flatMap(k => state.projects.filter(x => x.key === k)).map(full);
     }
-    return state.projects.filter(x => x.supportsPartial && filesOf(x).some(f => samePath(f, p))).map(partial);
+    return state.projects.filter(x => x.supportsPartial && filesOf(x).some(f => samePath(f, p))).map(x => partial(x));
   }
-  const inside = state.projects.filter(x => atOrUnder(x.dir, p)).map(full);
-  const enclosing = state.projects
-    .filter(x => x.supportsPartial && strictlyUnder(p, x.dir) && filesOf(x).some(f => strictlyUnder(f, p)))
-    .map(partial);
-  return [...inside, ...enclosing];
+  const inside = state.projects.filter(x => atOrUnder(x.dir, p));
+  const enclosing: Array<{ project: Project; target: RunTarget }> = [];
+  for (const x of state.projects) {
+    if (!x.supportsPartial || !strictlyUnder(p, x.dir)) continue;
+    const owned = filesOf(x).filter(f => strictlyUnder(f, p));
+    if (owned.length === 0) continue;
+    // With a project (custom ones included) under the directory, the adapter must not expand the
+    // directory itself, which would take that project's files too: it gets the owned files instead.
+    enclosing.push(inside.length === 0 ? partial(x) : partial(x, owned));
+  }
+  return [...inside.map(full), ...enclosing];
 }
 
 /**
@@ -423,7 +457,7 @@ export async function refreshFile(state: DiscoveryState, file: string, fs: FsRea
       if (!ownedPythonTest(file)) return rediscover; // A new Python project may start here.
     } else if (!owners.some(isCandidate)) {
       // Not a file an owner could take: maybe a directory moved in, searched like a workspace folder.
-      const found = await fs.find(file, SCAN_GLOBS, settings.exclude);
+      const found = await findInFolder(fs, file, SCAN_GLOBS, folder, settings.exclude);
       const isPythonTest = (f: string) => matchesAny(path.basename(f), ['test_*.py', '*_test.py']);
       if (found.some(f => !isPythonTest(f) || !ownedPythonTest(f))) return rediscover;
     }
@@ -440,10 +474,9 @@ export async function refreshFile(state: DiscoveryState, file: string, fs: FsRea
     let added: string[] = [];
     if (exists) {
       const exclude = excludesFor(project, settings);
-      const rel = posixRel(project.dir, file);
-      const candidates = matchesAny(rel, globs)
-        ? (matchesAny(rel, exclude) ? [] : [file])
-        : await fs.find(file, globs, exclude);
+      const candidates = matchesAny(posixRel(project.dir, file), globs)
+        ? (matchesAny(posixRel(folder, file), exclude) ? [] : [file])
+        : await findInFolder(fs, file, globs, folder, exclude);
       const mine = candidates.filter(f => owns(project, f, state.projects));
       added = await filterTestFiles(adapter, project, mine, fs, ctx);
     }

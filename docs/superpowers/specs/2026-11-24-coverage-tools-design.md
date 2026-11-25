@@ -570,6 +570,10 @@ estrutura que as regras automáticas não cubram.
   todos os projetos descobertos como se não houvesse comandos personalizados;
   só depois cada comando substitui os projetos que restaram dentro do seu
   diretório (assim, um orquestrador descartado continua descartado).
+- Comandos personalizados aninhados: vale só o mais externo, que suprime
+  também os comandos personalizados dentro do seu diretório.
+- Um comando personalizado em uma pasta do workspace suprime também os
+  projetos de outra pasta do workspace aninhada dentro do seu diretório.
 
 ### 5.8 Workspace não confiável
 
