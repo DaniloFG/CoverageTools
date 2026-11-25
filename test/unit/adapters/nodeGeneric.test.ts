@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { expect, test } from 'vitest';
-import { c8BinPath, nodeGenericAdapter } from '../../../src/adapters/nodeGeneric';
+import { createRequire } from 'node:module';
+import { C8_EXCLUDES, c8BinPath, nodeGenericAdapter } from '../../../src/adapters/nodeGeneric';
+import { matchesAny } from '../../../src/glob';
 import type { FsReader, PlanContext, Project } from '../../../src/adapters/types';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/settings';
 import { memoryFs } from './memoryFs';
@@ -10,7 +12,19 @@ const pkgFile = path.join(dir, 'package.json');
 const tmp = path.resolve('/tmp/ct-1');
 const c8 = path.resolve('/ext/node_modules/c8/bin/c8.js');
 const PLACEHOLDER = 'echo "Error: no test specified" && exit 1';
-const C8_ARGS = [c8, '--reporter=json', `--reports-dir=${tmp}`, `--temp-directory=${path.join(tmp, 'v8')}`];
+/** @istanbuljs/schema 0.1.6's default-exclude, expanded: c8's --exclude replaces it, so it is passed again. */
+const SCHEMA_EXTENSIONS = '.js,.cjs,.mjs,.ts,.tsx,.jsx'.split(',').map(e => e.slice(1)).join(',');
+const SCHEMA_DEFAULTS = [
+  'coverage/**', 'packages/*/test{,s}/**', '**/*.d.ts', 'test{,s}/**', `test{,-*}.{${SCHEMA_EXTENSIONS}}`,
+  `**/*{.,-}test.{${SCHEMA_EXTENSIONS}}`, '**/__tests__/**', '**/{ava,babel,nyc}.config.{js,cjs,mjs}',
+  '**/jest.config.{js,cjs,mjs,ts}', '**/{karma,rollup,webpack}.config.js', '**/.{eslint,mocha}rc.{js,cjs}',
+];
+/** Mocha's spec conventions and Yarn Berry's in-project package manager, which runs inside the wrapped process. */
+const EXTRA_EXCLUDES = [`**/*{.,-}spec.{${SCHEMA_EXTENSIONS}}`, 'spec{,s}/**', '.yarn/**', '.pnp.*'];
+const C8_ARGS = [
+  c8, '--reporter=json', `--reports-dir=${tmp}`, `--temp-directory=${path.join(tmp, 'v8')}`,
+  ...[...SCHEMA_DEFAULTS, ...EXTRA_EXCLUDES].map(g => `--exclude=${g}`),
+];
 const HINT = 'No coverage report was produced. Coverage for this project is collected with c8, which needs Node.js 18 or later.';
 const OWN_TOOL_HINT = 'The test script runs its own coverage tool but wrote no report the extension can read. Add an "lcov" or "json" reporter.';
 
@@ -111,6 +125,33 @@ test('the lockfile search stops at project.meta.workspaceFolder', async () => {
   expect((await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps[0].args[C8_ARGS.length]).toBe('yarn');
   const bounded = { ...project, meta: { workspaceFolder: dir } };
   expect((await nodeGenericAdapter.plan(bounded, { kind: 'full' }, ctx(fs))).steps[0].args[C8_ARGS.length]).toBe('npm');
+});
+
+test('the copied c8 default excludes match the installed @istanbuljs/schema', async () => {
+  const require = createRequire(path.join(process.cwd(), 'node_modules', 'c8', 'package.json'));
+  const installed: string[] = require('@istanbuljs/schema/default-exclude');
+  expect(C8_EXCLUDES).toEqual([...installed, ...EXTRA_EXCLUDES]);
+  expect(installed).toEqual(SCHEMA_DEFAULTS);
+});
+
+test('spec files and Yarn Berry files are excluded from c8 coverage', () => {
+  const excluded = (p: string) => matchesAny(p, C8_EXCLUDES);
+  for (const p of ['src/calc.spec.js', 'src/calc-spec.ts', 'spec/add.js', 'specs/a/b.js', '.yarn/releases/yarn-4.5.0.cjs', '.pnp.cjs', '.pnp.loader.mjs', 'test/a.js', 'src/a.test.js']) {
+    expect(excluded(p), p).toBe(true);
+  }
+  for (const p of ['src/calc.js', 'src/spec.js', 'lib/inspector.js', 'src/yarn.js']) expect(excluded(p), p).toBe(false);
+});
+
+test('a watch-mode test script gets no steps and a hint', async () => {
+  const hint = 'The test script runs in watch mode, so it never finishes. Remove the watch flag or set a command for this project in "coverageTools.commands".';
+  for (const test of ['mocha --watch', 'mocha -w', 'node --test --watch', 'node --watch-path=src --test', 'npm run unit -- --watch', 'yarn unit -w', 'tsc && mocha --watch=true']) {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test, unit: 'mocha' } }) });
+    expect(await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs)), test).toEqual({ steps: [], reportSearchDir: tmp, hint });
+  }
+  for (const test of ['mocha --watch=false', 'node --test', 'node scripts/gen.js -w && mocha', 'nyc mocha']) {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test } }) });
+    expect((await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps, test).toHaveLength(1);
+  }
 });
 
 test('c8BinPath points into the extension\'s node_modules', () => {

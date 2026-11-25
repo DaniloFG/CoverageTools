@@ -31,7 +31,8 @@ async function projectOf(files: Record<string, string>): Promise<{ project: Proj
   return { project, fs };
 }
 
-const COVERAGE_ARGS = ['--coverage', '--coverage.reporter=json', `--coverage.reportsDirectory=${tmp}`];
+// --coverage.reportOnFailure: Vitest 4 writes no report when a test fails unless asked to.
+const COVERAGE_ARGS = ['--coverage', '--coverage.reporter=json', `--coverage.reportsDirectory=${tmp}`, '--coverage.reportOnFailure'];
 const HINT = 'Vitest did not write a coverage report. Install its coverage provider: "@vitest/coverage-v8".';
 
 test('detects by vitest.config.*, a test block in vite.config.*, or a test script that ends in vitest', async () => {
@@ -148,8 +149,38 @@ test('the lockfile search stops at project.meta.workspaceFolder', async () => {
 
 test('isTestFile follows the default Vitest patterns', async () => {
   const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'vitest' } }) });
-  const yes = ['src/a.test.ts', 'src/a.spec.tsx', 'a.test.js', 'a.test.mts', 'src/__tests__/x.ts'];
-  const no = ['src/a.ts', 'src/a.test.json', 'node_modules/lib/a.test.ts', '../other/a.test.ts'];
+  const yes = ['src/a.test.ts', 'src/a.spec.tsx', 'a.test.js', 'a.test.mts', 'a.spec.cjs', 'src/__tests__/x.test.ts'];
+  // Vitest's default include is only **/*.{test,spec}.?(c|m)[jt]s?(x): a plain file under __tests__ never runs.
+  const no = ['src/a.ts', 'src/a.test.json', 'src/__tests__/x.ts', 'node_modules/lib/a.test.ts', '../other/a.test.ts'];
   for (const p of yes) expect(await vitestAdapter.isTestFile(project, path.join(dir, p), fs), p).toBe(true);
   for (const p of no) expect(await vitestAdapter.isTestFile(project, path.join(dir, p), fs), p).toBe(false);
+});
+
+test('a partial selection of files Vitest never runs has no steps', async () => {
+  const plain = path.join(dir, 'src', '__tests__', 'x.ts');
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'vitest' } }), [plain]: '' });
+  for (const paths of [[plain], [path.dirname(plain)]]) {
+    const plan = await vitestAdapter.plan(project, { kind: 'partial', paths }, ctx(fs));
+    expect(plan.steps).toEqual([]);
+    expect(plan.hint).toBe('No test files were found in the selected folder.');
+  }
+});
+
+test('only a top-level test key of a vite.config counts, outside comments', async () => {
+  const viteOf = async (text: string) => detected({ [pkgFile]: pkg({}), [path.join(dir, 'vite.config.ts')]: text });
+  expect((await viteOf('export default defineConfig(() => ({ plugins: [react()], test: { globals: true } }));'))?.adapter).toBe('vitest');
+  expect((await viteOf("export default {\n  'test': {},\n};"))?.adapter).toBe('vitest');
+  expect(await viteOf('export default { build: { rollupOptions: { input: { main: "a.html", test: "t.html" } } } };')).toBeUndefined();
+  expect(await viteOf('export default {\n  // test: { environment: "jsdom" },\n  plugins: [],\n};')).toBeUndefined();
+  expect(await viteOf('export default {\n  /* test: {} */ plugins: [],\n};')).toBeUndefined();
+  expect(await viteOf('export default { plugins: [foo({ test: true })] };')).toBeUndefined();
+  expect(await viteOf('export default { define: { "process.env.X": JSON.stringify("test: 1") } };')).toBeUndefined();
+});
+
+test('a vitest bench script is not a test script', async () => {
+  expect(await detected({ [pkgFile]: pkg({ scripts: { test: 'vitest bench' } }) })).toBeUndefined();
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'vitest bench --run' } }), [path.join(dir, 'vitest.config.ts')]: '' });
+  expect((await vitestAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps[0]).toMatchObject({
+    command: 'npx', args: ['--no-install', 'vitest', 'run', ...COVERAGE_ARGS],
+  });
 });

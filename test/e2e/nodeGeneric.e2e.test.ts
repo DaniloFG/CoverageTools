@@ -52,6 +52,8 @@ test.each(['node-mocha', 'node-mocha-ts', 'node-test'])('%s: full run covers add
   expect(real.output.join('')).toContain(`> node ${real.deps.c8Bin} --reporter=json`);
   const { file, covered, uncovered } = EXPECTED[sample];
   const abs = path.join(sampleDir(sample), file);
+  // Exactly the source: node-mocha also runs src/calc.spec.js and spec/add.spec.js, which c8's own
+  // defaults would report as source.
   expect(filesOf(sample)).toEqual([abs]);
   const byLine = new Map(linesOf(real.store, abs));
   for (const line of covered) expect(byLine.get(line), `line ${line}`).toBeGreaterThan(0);
@@ -65,28 +67,30 @@ test('node-mocha-ts reports the .ts source file, not transpiled output', async (
   expect(filesOf('node-mocha-ts')).toEqual([ts]);
   expect(linesOf(real.store, ts).map(([line]) => line)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
-  // The real functions are found at their .ts positions, but esbuild's CommonJS helpers (and the getters
-  // `__export` defines) have no source mapping and land on line 1, column 0: a c8 limitation recorded in
-  // the design's section 6. The getter named `add` merges with the real `add` (same name and line).
+  // The real functions are found at their .ts positions. esbuild's CommonJS helpers (`__export`,
+  // `__toCommonJS`, ...) have no source mapping and c8 puts them at 1:0; the Istanbul parser drops them by
+  // name. What remains is a c8 limitation recorded in the design's section 6: the getters `__export`
+  // defines (`get`, and one per export) also land at 1:0 — the getter `add` merges with the real `add`
+  // (same name and line), the getter `divide` stays as an extra uncovered declaration — and so do the
+  // branches of the helpers.
   const entry = real.store.merged().find(e => e.path === ts);
   const file = unionFiles(entry?.parts ?? []);
   const declarations: Array<[string, number, number, number]> = [];
   for (let i = 0; i < file.declarations.length; i += 6) {
     declarations.push([file.names[file.declarations[i + 5]], file.declarations[i], file.declarations[i + 1], file.declarations[i + 4]]);
   }
-  expect(declarations).toEqual([
-    ['__copyProps', 1, 0, 1], ['__export', 1, 0, 1], ['__name', 1, 0, 2], ['__toCommonJS', 1, 0, 1],
-    ['add', 1, 0, 2], ['divide', 1, 0, 0], ['divide', 5, 7, 0], ['get', 1, 0, 1],
-  ]);
+  expect(declarations).toEqual([['add', 1, 0, 2], ['divide', 1, 0, 0], ['divide', 5, 7, 0], ['get', 1, 0, 1]]);
+  // Branches as [line, col]: add's body at 1:7 and divide's at 5:16 are real; the 9 at 1:0 are the helpers'.
+  const branches: string[] = [];
+  for (let i = 0; i < file.branches.length; i += 4) branches.push(`${file.branches[i]}:${file.branches[i + 1]}`);
+  expect(branches.filter(b => b === '1:0')).toHaveLength(9);
+  expect(branches.filter(b => b !== '1:0')).toEqual(['1:7', '5:16']);
 });
 
 test('node-nyc: the unwrapped script report is found in the project and ingested', async () => {
   const dir = sampleDir('node-nyc');
-  // nyc's lcov names files relative to the project (`SF:src/calc.js`), which the parser resolves against
-  // the report directory and then each root in order: with every sample as a root it would pick
-  // samples/node-mocha/src/calc.js. The project is the only root here, as in a workspace opened on it.
-  await real.dispose();
-  real = createRealDeps([dir], {}, [nodeGenericAdapter]);
+  // nyc's lcov names files relative to the project (`SF:src/calc.js`). Every sample is a root here, and
+  // samples/node-mocha/src/calc.js exists too: the exact path below proves it resolves to this project.
   const before = Date.now();
   await runFull('node-nyc');
   expect(real.output.join('')).toContain('> npm run test\n');

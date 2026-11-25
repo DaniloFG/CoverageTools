@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { localBin, NODE_TEST_FILE, packageManagerOf, scriptCommand, scriptInvokes, scriptTailCalls, selectedTestFiles, workspaceFolderOf } from '../../../src/adapters/nodeShared';
+import { localBin, NODE_TEST_FILE, packageManagerOf, scriptCommand, scriptCommandWords, scriptInvokes, scriptTailCalls, selectedTestFiles, workspaceFolderOf } from '../../../src/adapters/nodeShared';
 import type { Project } from '../../../src/adapters/types';
 import { DEFAULT_SETTINGS } from '../../../src/settings';
 import { memoryFs } from './memoryFs';
@@ -188,4 +188,15 @@ test.each([
   [{}, false],
 ])('scriptInvokes(%j, nyc|c8) is %s', (scripts, expected) => {
   expect(scriptInvokes({ scripts }, ['nyc', 'c8'])).toBe(expected);
+});
+
+test.each([
+  [{ test: 'mocha --watch' }, [['mocha', '--watch']]],
+  [{ test: 'tsc && node --test "a b"' }, [['tsc'], ['node', '--test', 'a b']]],
+  [{ test: 'yarn unit -w', unit: 'FOO=1 mocha' }, [['yarn', 'unit', '-w'], ['FOO=1', 'mocha', '-w']]],
+  [{ test: 'npm run unit -- --watch', unit: 'mocha && echo' }, [['npm', 'run', 'unit', '--', '--watch'], ['mocha', '--watch'], ['echo', '--watch']]],
+  [{ test: 'npm run a', a: 'npm run b', b: 'mocha --watch' }, [['npm', 'run', 'a'], ['npm', 'run', 'b']]],
+  [{}, []],
+])('scriptCommandWords(%j) is %j', (scripts, expected) => {
+  expect(scriptCommandWords({ scripts })).toEqual(expected);
 });

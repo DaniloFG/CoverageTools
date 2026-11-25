@@ -1,6 +1,9 @@
 import path from 'node:path';
 import { jestAdapter } from './jest';
-import { localBin, packageManagerOf, readPackageJson, scriptCommand, scriptInvokes, workspaceFolderOf, type PackageJson } from './nodeShared';
+import {
+  localBin, packageManagerOf, readPackageJson, scriptCommand, scriptCommandWords, scriptInvokes, toolName, workspaceFolderOf,
+  type PackageJson,
+} from './nodeShared';
 import type { Adapter, FsReader, Project } from './types';
 import { vitestAdapter } from './vitest';
 
@@ -9,7 +12,43 @@ const NPM_INIT_PLACEHOLDER = 'echo "Error: no test specified" && exit 1';
 const MOCHARC_FILES = ['js', 'cjs', 'mjs', 'json', 'jsonc', 'yaml', 'yml'].map(ext => `.mocharc.${ext}`);
 const OWN_COVERAGE_TOOLS = ['nyc', 'c8'];
 const HINT = 'No coverage report was produced. Coverage for this project is collected with c8, which needs Node.js 18 or later.';
+const WATCH_HINT = 'The test script runs in watch mode, so it never finishes. Remove the watch flag or set a command for this project in "coverageTools.commands".';
 const OWN_TOOL_HINT = 'The test script runs its own coverage tool but wrote no report the extension can read. Add an "lcov" or "json" reporter.';
+
+/** The extensions in @istanbuljs/schema's default-extension, as its default-exclude spells them. */
+const EXTENSIONS = 'js,cjs,mjs,ts,tsx,jsx';
+
+/**
+ * What c8 leaves out. c8's `--exclude` replaces its defaults, so they are passed again: first
+ * @istanbuljs/schema 0.1.6's default-exclude (a unit test compares this copy with the installed package),
+ * then Mocha's spec conventions and Yarn Berry's in-project files (`.yarn/releases/*.cjs`, `.pnp.cjs`,
+ * `.pnp.loader.mjs`), which run inside the wrapped `yarn run test`. node_modules is excluded by c8's
+ * own `--exclude-node-modules`, on by default.
+ */
+export const C8_EXCLUDES: readonly string[] = [
+  'coverage/**',
+  'packages/*/test{,s}/**',
+  '**/*.d.ts',
+  'test{,s}/**',
+  `test{,-*}.{${EXTENSIONS}}`,
+  `**/*{.,-}test.{${EXTENSIONS}}`,
+  '**/__tests__/**',
+  '**/{ava,babel,nyc}.config.{js,cjs,mjs}',
+  '**/jest.config.{js,cjs,mjs,ts}',
+  '**/{karma,rollup,webpack}.config.js',
+  '**/.{eslint,mocha}rc.{js,cjs}',
+  `**/*{.,-}spec.{${EXTENSIONS}}`,
+  'spec{,s}/**',
+  '.yarn/**',
+  '.pnp.*',
+];
+
+/** A watch flag in any command of the test script: `--watch` (Mocha, `node --test`), `--watch-path`, Mocha's `-w`. */
+function watches(pkg: PackageJson): boolean {
+  return scriptCommandWords(pkg).some(words =>
+    words.some(w => w === '--watch' || w === '--watch=true' || w.startsWith('--watch-path'))
+    || (words.includes('-w') && words.some(w => ['mocha', '_mocha'].includes(toolName(w)))));
+}
 
 /** The c8 entry point shipped inside the extension. */
 export function c8BinPath(extensionRoot: string): string {
@@ -63,6 +102,7 @@ export const nodeGenericAdapter: Adapter = {
     const pkg = (await readPackageJson(path.join(project.dir, 'package.json'), ctx.fs)) ?? {};
     const pm = await packageManagerOf(project.dir, ctx.fs, workspaceFolderOf(project));
     const extra = ctx.settings.nodeExtraArgs;
+    if (hasTestScript(pkg) && watches(pkg)) return { steps: [], reportSearchDir: ctx.tmpDir, hint: WATCH_HINT };
     if (hasTestScript(pkg) && scriptInvokes(pkg, OWN_COVERAGE_TOOLS)) {
       // Wrapping nyc or c8 in c8 again would measure the wrong process; the script's own report is used.
       const { command, args } = scriptCommand(pm, 'test', extra);
@@ -75,6 +115,7 @@ export const nodeGenericAdapter: Adapter = {
       `--reports-dir=${ctx.tmpDir}`,
       // c8's raw V8 output; kept apart from the report, which the run searches for in tmpDir.
       `--temp-directory=${path.join(ctx.tmpDir, 'v8')}`,
+      ...C8_EXCLUDES.map(glob => `--exclude=${glob}`),
     ];
     return {
       steps: [{ command: 'node', args: [...c8Args, test.command, ...test.args], cwd: project.dir }],

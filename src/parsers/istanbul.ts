@@ -34,6 +34,14 @@ function asRange(v: unknown): Range | undefined {
   return isObject(v) ? (v as Range) : undefined;
 }
 
+/**
+ * The helper functions esbuild prepends to CommonJS output (tsx, for one). They have no source mapping,
+ * so c8 reports them at 1:0 of the original file. Dropped by name only: a real function can sit at 1:0.
+ */
+const ESBUILD_HELPERS = new Set([
+  '__export', '__toCommonJS', '__copyProps', '__name', '__defProp', '__getOwnPropDesc', '__getOwnPropNames', '__hasOwnProp',
+]);
+
 function addFile(b: FileBuilder, data: Record<string, unknown>): void {
   const statementMap = isObject(data.statementMap) ? data.statementMap : {};
   const s = isObject(data.s) ? data.s : {};
@@ -54,6 +62,7 @@ function addFile(b: FileBuilder, data: Record<string, unknown>): void {
     const line = lineOf(loc?.start);
     if (line === 0) continue;
     const name = typeof fn.name === 'string' && fn.name !== '' ? fn.name : `(anonymous_${id})`;
+    if (ESBUILD_HELPERS.has(name)) continue;
     b.addDeclaration(name, line, startColOf(loc?.start), Math.max(lineOf(loc?.end), line), endColOf(loc?.end), countOf(f[id]));
   }
 

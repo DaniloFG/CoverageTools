@@ -86,3 +86,15 @@ test('an empty object is a valid report with zero files', () => {
 test('signature is the empty string', () => {
   expect(parseIstanbul(read('coverage-final.json'), ctx).signature).toBe('');
 });
+
+test("esbuild's helper functions are dropped by name only, wherever they are", () => {
+  const fn = (name: string, line: number, col: number) => ({ name, decl: { start: { line, column: col }, end: { line, column: col + 1 } }, loc: { start: { line, column: col }, end: { line: line + 1, column: 1 } }, line });
+  const helpers = ['__export', '__toCommonJS', '__copyProps', '__name', '__defProp', '__getOwnPropDesc', '__getOwnPropNames', '__hasOwnProp'];
+  const names = [...helpers, 'get', 'divide', 'add', '__exportStar_like', 'real'];
+  const fnMap = Object.fromEntries(names.map((n, i) => [String(i), fn(n, n === 'real' ? 7 : 1, 0)]));
+  const f = Object.fromEntries(names.map((_, i) => [String(i), 1]));
+  const json = JSON.stringify({ '/w/src/a.ts': { path: '/w/src/a.ts', statementMap: {}, s: {}, fnMap, f, branchMap: {}, b: {} } });
+  const file = parseIstanbul(json, ctx).files[0];
+  // A real function at 1:0 is kept, whatever its position; only the fixed helper names go.
+  expect(decls(file).map(([name]) => name).sort()).toEqual(['__exportStar_like', 'add', 'divide', 'get', 'real']);
+});

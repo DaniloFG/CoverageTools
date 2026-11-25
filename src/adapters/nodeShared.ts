@@ -84,7 +84,7 @@ const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const NODE_OPTIONS_WITH_VALUE = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions']);
 
 /** The tool name of a binary path: `node_modules/.bin/jest` → jest, `node_modules/jest/bin/jest.js` → jest. */
-function toolName(word: string): string {
+export function toolName(word: string): string {
   const parts = word.split(/[\\/]/);
   const nm = parts.lastIndexOf('node_modules');
   if (nm >= 0 && nm + 1 < parts.length && parts[nm + 1] !== '.bin') {
@@ -242,6 +242,32 @@ export function scriptInvokes(pkg: PackageJson, tools: readonly string[]): boole
     return tools.includes(name) && (parsed.bin === name || parsed.bin.split(/[\\/]/).includes('node_modules'));
   };
   return commandsOf('test').some(parsed => runsTool(parsed) || (parsed.kind === 'script' && commandsOf(parsed.name).some(runsTool)));
+}
+
+/**
+ * The words of every command the `test` script runs (split at `&&`, `||`, `;`, `|`, `&`, `>`, `<`), and of
+ * the script it redirects to (one level), with the arguments the redirection forwards appended to each
+ * of the target's commands. For flag checks such as watch mode.
+ */
+export function scriptCommandWords(pkg: PackageJson): string[][] {
+  const scripts = pkg.scripts ?? {};
+  const commandsOf = (name: string): string[] => {
+    const line = Object.hasOwn(scripts, name) ? scripts[name] : undefined;
+    return typeof line === 'string' ? splitCommands(line) : [];
+  };
+  const out: string[][] = [];
+  for (const command of commandsOf('test')) {
+    const words = tokenize(command);
+    if (words === undefined) continue;
+    out.push(words);
+    const parsed = parseLine(command, scripts);
+    if (parsed?.kind !== 'script') continue;
+    for (const inner of commandsOf(parsed.name)) {
+      const innerWords = tokenize(inner);
+      if (innerWords !== undefined) out.push([...innerWords, ...parsed.args]);
+    }
+  }
+  return out;
 }
 
 /** The workspace folder discovery recorded on the project (`meta.workspaceFolder`), if any. */

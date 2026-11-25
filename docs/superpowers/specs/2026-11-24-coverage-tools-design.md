@@ -165,7 +165,7 @@ em convenções de um time.
 | `dotnet-vstest` | um `.csproj` de testes sobre VSTest: referencia `Microsoft.NET.Test.Sdk` ou declara `<IsTestProject>true</IsTestProject>`, e não se enquadra na linha de baixo | sim |
 | `dotnet-mtp` | um `.csproj` de testes sobre Microsoft.Testing.Platform: SDK `MSTest.Sdk`, `<EnableMSTestRunner>`, `<EnableNUnitRunner>`, `<UseMicrosoftTestingPlatformRunner>`, `<TestingPlatformDotnetTestSupport>`, referência a `TUnit`, ou `global.json` selecionando esse executor; e, salvo `MSTest.Sdk` e `TUnit`, referência a um framework de testes reconhecido (MSTest, NUnit, xUnit) ou ao `Microsoft.NET.Test.Sdk`. `<IsTestProject>false</IsTestProject>` exclui o projeto | depende do framework (seção 5.3) |
 | `jest` | um diretório com `package.json` e Jest configurado: chave `jest`, arquivo `jest.config.*`, ou script `test` que chama `jest` ou `react-scripts test` | sim |
-| `vitest` | um diretório com `package.json` e Vitest configurado: arquivo `vitest.config.*`, bloco `test` em `vite.config.*`, ou script `test` que chama `vitest` | sim |
+| `vitest` | um diretório com `package.json` e Vitest configurado: arquivo `vitest.config.*`, chave `test` no nível de cima da configuração em `vite.config.*` (fora de comentários e de objetos aninhados como `build.rollupOptions.input`), ou script `test` que chama `vitest` (não `vitest bench`) | sim |
 | `node-generic` | qualquer outro diretório com `package.json` que tenha um script `test` real ou um arquivo `.mocharc.*` (Mocha, AVA, `node --test`, Jasmine, tap etc.) | não |
 | `python` | um diretório com marcador de projeto Python (`pyproject.toml`, `setup.py`, `setup.cfg`, `pytest.ini` ou `tox.ini`) que contenha arquivos de teste; sem marcador, a pasta do workspace que contém os arquivos de teste. Atende pytest e `unittest` | sim |
 
@@ -218,8 +218,8 @@ e o lê ao terminar.
 | `dotnet-vstest` | `dotnet test "<csproj>" <coleta> --results-directory "<tmp>"` | `--filter` com as classes de teste do arquivo/pasta (`FullyQualifiedName~Namespace.Classe.`, com ponto final, unidas por `\|`; classe aninhada como `Namespace.Externa+Interna.`) |
 | `dotnet-mtp` | `dotnet run --project "<csproj>" -- --coverage --coverage-output-format cobertura --coverage-output "<tmp>/coverage.cobertura.xml" --results-directory "<tmp>"` | conforme o framework (abaixo) |
 | `jest` | `<jest> --coverage --coverageReporters=json --coverageDirectory="<tmp>"`, com `CI=true` | `--runTestsByPath` seguido dos arquivos de teste selecionados (uma pasta vira os arquivos de teste dentro dela), caminhos relativos |
-| `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>"`, com `CI=true` | os arquivos de teste selecionados, caminhos relativos, precedidos de `--exclude=<arquivo>` para cada outro arquivo de teste que o filtro também pegaria |
-| `node-generic` | `node <c8> --reporter=json --reports-dir="<tmp>" --temp-directory="<tmp>/v8" <comando de teste>`, usando o `c8` embutido na extensão | — |
+| `vitest` | `<vitest> --coverage --coverage.reporter=json --coverage.reportsDirectory="<tmp>" --coverage.reportOnFailure`, com `CI=true` (sem `reportOnFailure`, o Vitest 4 não grava relatório quando um teste falha) | os arquivos de teste selecionados, caminhos relativos, precedidos de `--exclude=<arquivo>` para cada outro arquivo de teste que o filtro também pegaria |
+| `node-generic` | `node <c8> --reporter=json --reports-dir="<tmp>" --temp-directory="<tmp>/v8" --exclude=<padrão>… <comando de teste>`, usando o `c8` embutido na extensão | — |
 | `python` | conforme o que existe no ambiente (abaixo) | caminho relativo do arquivo/pasta |
 
 **Node**
@@ -264,10 +264,20 @@ e o lê ao terminar.
   um Node mais antigo, a execução falha com uma mensagem dizendo isso. O comando de teste é `<pm> run test` ou, sem script e com
   `.mocharc.*`, o executável local do Mocha (o script `test` padrão do
   `npm init`, que só imprime um erro, não conta). Os dados brutos do V8 vão
-  para `<tmp>/v8`, separados do relatório. Não é preciso `--all`, `--src` nem
-  `--exclude-after-remap`: o `c8` já relata só os arquivos carregados, sem
-  testes nem `node_modules` (padrões do `@istanbuljs/schema`), e o projeto
-  em TypeScript via `tsx` sai com o arquivo `.ts` (seção 6). Exceção: se o
+  para `<tmp>/v8`, separados do relatório. O `c8` relata só os arquivos
+  carregados (sem `--all`) e deixa `node_modules` de fora, mas os padrões
+  de exclusão do `@istanbuljs/schema` só tiram `test{,s}/**`,
+  `*.test.*`/`*-test.*` e `__tests__/**`: não tiram os `*.spec.*` e a pasta
+  `spec/` do Mocha, nem os arquivos do Yarn Berry dentro do projeto
+  (`.yarn/releases/*.cjs`, `.pnp.cjs`, `.pnp.loader.mjs`), que rodam dentro
+  do `yarn run test` embrulhado. Como `--exclude` substitui os padrões do
+  `c8`, a extensão passa os padrões do `@istanbuljs/schema` (cópia conferida
+  por teste com o pacote instalado) mais `**/*{.,-}spec.*`, `spec{,s}/**`,
+  `.yarn/**` e `.pnp.*`. Não é preciso `--src` nem `--exclude-after-remap`:
+  o projeto em TypeScript via `tsx` sai com o arquivo `.ts` (seção 6). Um
+  script `test` em modo watch (`--watch`, `--watch-path`, `-w` do Mocha) não
+  roda: a execução não teria fim, e a dica manda tirar a opção ou definir um
+  comando personalizado. Exceção: se o
   script `test` (ou o script para o qual ele redireciona) já chama `nyc` ou
   `c8` em algum de seus comandos, a extensão não embrulha de novo; roda o
   script como está e depois procura um relatório reconhecido dentro do
@@ -488,9 +498,12 @@ Alvos válidos do botão direito, e o que cada um executa:
 
 Arquivo de teste é:
 
-- **`jest` e `vitest`:** arquivo dentro do projeto que casa com
+- **`jest`:** arquivo dentro do projeto que casa com
   `**/__tests__/**/*.[jt]s?(x)` ou `**/?(*.)+(spec|test).[jt]s?(x)`,
   incluindo `.mjs`/`.cjs`/`.mts`/`.cts`.
+- **`vitest`:** arquivo dentro do projeto que casa com o `include` padrão do
+  Vitest 4, `**/*.{test,spec}.?(c|m)[jt]s?(x)`; um arquivo comum dentro de
+  `__tests__` não conta, porque o Vitest não o roda.
 - **`dotnet-vstest` e `dotnet-mtp`:** arquivo `.cs` dentro de um projeto de testes cujo conteúdo
   tem atributos de teste (`[Fact]`, `[Theory]`, `[Test]`, `[TestCase]`,
   `[TestCaseSource]`, `[TestMethod]`, `[DataTestMethod]`; no TUnit, `[Test]`),
@@ -671,12 +684,15 @@ Em Mocha com TypeScript via `tsx` (script `mocha --import=tsx`; com espaço,
 arquivo `.ts`, não o código gerado, e a cobertura por linha do corpo das
 funções está nas linhas certas. **Limitação registrada:** o `tsx` compila
 para CommonJS (observado também com `"type": "module"` no projeto), e as
-funções auxiliares que o esbuild acrescenta
-(`__export`, `__toCommonJS`, `__copyProps`, `__name` e os getters das
-exportações) não têm mapeamento de origem; o v8-to-istanbul as joga na linha
-1, coluna 0. Resultado: declarações a mais na linha 1 (inclusive um
-`divide` não coberto, o getter da exportação) e ramos a mais nessa linha, o
-que altera os totais de declarações e ramos. Além disso, a linha
+funções auxiliares que o esbuild acrescenta (`__export`, `__toCommonJS`,
+`__copyProps`, `__name`...) e os getters das exportações não têm mapeamento
+de origem; o v8-to-istanbul as joga na linha 1, coluna 0. O parser de
+Istanbul descarta as declarações com os nomes fixos dessas auxiliares (só
+pelo nome, nunca pela posição, porque uma função real pode estar em 1:0).
+Sobram, no exemplo de duas funções exportadas: duas declarações a mais na
+linha 1 (`get` e um `divide` não coberto, o getter da exportação; o getter
+`add` se funde com o `add` real, de mesmo nome e linha) e 9 ramos a mais em
+1:0, o que altera os totais de declarações e ramos. Além disso, a linha
 `export function f(...) {` de uma função não executada aparece coberta,
 porque a faixa do V8 para a função começa depois de `export `. Nenhuma opção
 do `c8` 10 resolve (`--exclude-after-remap` só filtra arquivos inteiros;
@@ -684,11 +700,12 @@ do `c8` 10 resolve (`--exclude-after-remap` só filtra arquivos inteiros;
 precisa de números exatos usa o comando personalizado (seção 5.7) com a
 ferramenta de cobertura do próprio executor.
 
-*Achado da mesma validação:* o caminho relativo de um relatório LCOV
-(`SF:src/calc.js`, como grava o `nyc`) é resolvido contra a pasta do
-relatório e depois contra cada raiz do workspace, nessa ordem; para um
-projeto abaixo da raiz isso pode não achar o arquivo ou achar o de outro
-projeto. Fica para a resolução de caminhos dos parsers (seção 5.3, B).
+*Achado da mesma validação (corrigido):* o caminho relativo de um relatório
+LCOV (`SF:src/calc.js`, como grava o `nyc`) era resolvido contra a pasta do
+relatório e depois contra cada raiz do workspace, e podia achar o arquivo de
+outro projeto. Agora a resolução parte da própria localização do relatório e
+do projeto que rodou; o teste ponta a ponta do `node-nyc` confere isso com
+várias raízes.
 
 *Achado na validação do Vitest (4.0.18):* sem arquivo de configuração no
 projeto, o Vitest procura um `vitest.config.*` nas pastas acima e pode usar o

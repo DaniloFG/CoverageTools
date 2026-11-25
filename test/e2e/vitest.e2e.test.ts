@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import type { Project, RunTarget } from '../../src/adapters/types';
@@ -87,4 +89,29 @@ test('without a coverage provider the run ends as no-report with the hint', asyn
   });
   expect(real.output.join('')).toContain("Cannot find dependency '@vitest/coverage-v8'");
   expect(sampleStatus('node-vitest-noprovider')).toBe('');
+});
+
+test('a failing test still yields coverage and the outcome tests-failed', async () => {
+  // A temp copy of the sample whose calc.test.ts fails; node_modules is the sample's.
+  const copy = mkdtempSync(path.join(realpathSync(os.tmpdir()), 'ct-vitest-failing-'));
+  try {
+    for (const entry of ['src', 'package.json', 'vitest.config.ts']) cpSync(path.join(dir, entry), path.join(copy, entry), { recursive: true });
+    symlinkSync(path.join(dir, 'node_modules'), path.join(copy, 'node_modules'), 'junction');
+    const failing = path.join(copy, 'src', 'calc.test.ts');
+    writeFileSync(failing, readFileSync(failing, 'utf8').replace('toBe(3)', 'toBe(4)'));
+
+    const failingReal = createRealDeps([copy], {}, [vitestAdapter]);
+    try {
+      const project = await vitestAdapter.detect(path.join(copy, 'package.json'), nodeFsReader());
+      if (project === undefined) throw new Error('the copy is not detected as a Vitest project');
+      const outcome = await runProject(project, { kind: 'full' }, failingReal.deps, new AbortController().signal);
+      expect(outcome.status, failingReal.output.join('')).toBe('tests-failed');
+      const byLine = new Map(linesOf(failingReal.store, path.join(copy, 'src', 'calc.ts')));
+      for (const line of [...ADD_LINES, ...DIVIDE_LINES]) expect(byLine.get(line), `line ${line}`).toBeGreaterThan(0);
+    } finally {
+      await failingReal.dispose();
+    }
+  } finally {
+    rmSync(copy, { recursive: true, force: true });
+  }
 });
