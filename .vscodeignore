@@ -2,13 +2,15 @@
 # vsce only packages production dependencies, so re-including node_modules
 # brings in c8 and its runtime dependencies and nothing from devDependencies.
 # Source maps from development builds are left out (negations win in vsce).
+# The README's images are not shipped: `npm run package` points them at the
+# repository (--baseImagesUrl), so docs/ stays out.
 **
-!dist/**/*.js
+!dist/*.js
 !node_modules/**
+!media/icon.png
 !README.md
 !CHANGELOG.md
 !LICENSE
-!docs/images/**
 !package.json
 # Sample projects (and their own node_modules) are never packaged; listed last so it wins.
 samples/**

@@ -1,10 +1,13 @@
+import { execFile } from 'node:child_process';
 import { cp, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { promisify } from 'node:util';
+import { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath } from '@vscode/test-electron';
 import { _electron, type ElectronApplication, type Page } from 'playwright-core';
 
 export interface LaunchOptions {
+  /** The extension's folder, loaded as under development (or linked in with `installed`). Ignored with `vsix`. */
   extensionPath: string;
   workspace: string;
   settings?: object;
@@ -19,6 +22,12 @@ export interface LaunchOptions {
    * extension, so the window is not an "Extension Development Host" (for screenshots). Default false.
    */
   installed?: boolean;
+  /**
+   * A packaged `.vsix`: installed into the session's empty extensions folder with VS Code's own
+   * `--install-extension` before the launch, and loaded from there like any user's extension
+   * (no `--extensionDevelopmentPath`).
+   */
+  vsix?: string;
   /**
    * For the harness's own tests: awaited at a fixed point of the launch ('launched': the process is
    * up, before the window is awaited; 'window': the first window exists), so a test can act there.
@@ -424,7 +433,8 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
     const extensionsDir = join(tempRoot, 'extensions');
     await mkdir(join(userDataDir, 'User'), { recursive: true });
     await mkdir(extensionsDir, { recursive: true });
-    if (opts.installed) await linkExtension(resolve(opts.extensionPath), extensionsDir);
+    if (opts.vsix) await installVsix(executablePath, resolve(opts.vsix), userDataDir, extensionsDir);
+    else if (opts.installed) await linkExtension(resolve(opts.extensionPath), extensionsDir);
     await writeFile(
       join(userDataDir, 'User', 'settings.json'),
       JSON.stringify({ ...BASE_SETTINGS, ...(opts.trusted === false ? UNTRUSTED_SETTINGS : {}), ...opts.settings }, null, 2),
@@ -445,7 +455,7 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
         // Trace lines of the extension's output channel tell the harness which file events arrived.
         '--log=DaniloFG.coverage-tools:trace',
         '--window-size=1280,800',
-        ...(opts.installed ? [] : [`--extensionDevelopmentPath=${resolve(opts.extensionPath)}`]),
+        ...(opts.installed || opts.vsix ? [] : [`--extensionDevelopmentPath=${resolve(opts.extensionPath)}`]),
         `--user-data-dir=${userDataDir}`,
         `--extensions-dir=${extensionsDir}`,
         ...(opts.args ?? []),
@@ -476,6 +486,14 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
 async function linkExtension(extensionPath: string, extensionsDir: string): Promise<void> {
   const manifest = JSON.parse(await readFile(join(extensionPath, 'package.json'), 'utf8')) as { publisher: string; name: string; version: string };
   await symlink(extensionPath, join(extensionsDir, `${manifest.publisher.toLowerCase()}.${manifest.name}-${manifest.version}`), 'dir');
+}
+
+/** Installs a `.vsix` with the VS Code command line into `extensionsDir`, as a user would. */
+async function installVsix(executablePath: string, vsix: string, userDataDir: string, extensionsDir: string): Promise<void> {
+  const cli = resolveCliPathFromVSCodeExecutablePath(executablePath);
+  const args = ['--install-extension', vsix, `--user-data-dir=${userDataDir}`, `--extensions-dir=${extensionsDir}`];
+  // The Windows CLI is a .cmd script, which only runs through a shell.
+  await promisify(execFile)(cli, args, { shell: process.platform === 'win32', timeout: 120_000 });
 }
 
 /** Closes VS Code, killing it if it has not exited within `timeoutMs`. */

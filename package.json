@@ -5,6 +5,15 @@
   "version": "0.0.1",
   "publisher": "DaniloFG",
   "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#149A82",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/DaniloFG/CoverageTools#readme",
+  "bugs": {
+    "url": "https://github.com/DaniloFG/CoverageTools/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/DaniloFG/CoverageTools"
@@ -14,6 +23,20 @@
   },
   "categories": [
     "Testing"
+  ],
+  "keywords": [
+    "coverage",
+    "code coverage",
+    "test coverage",
+    "testing",
+    "jest",
+    "vitest",
+    "dotnet",
+    "pytest",
+    "c8",
+    "istanbul",
+    "cobertura",
+    "lcov"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -190,7 +213,7 @@
     "test:ui": "node esbuild.mjs && node test/ui/run.mjs",
     "check:size": "node scripts/check-size.mjs",
     "screenshots": "node scripts/screenshots.mjs",
-    "package": "vsce package --no-yarn"
+    "package": "node -e \"require('fs').mkdirSync('release',{recursive:true})\" && vsce package --no-yarn --baseContentUrl https://github.com/DaniloFG/CoverageTools/blob/main --baseImagesUrl https://github.com/DaniloFG/CoverageTools/raw/main --out release/"
   },
   "dependencies": {
     "c8": "^10.1.3"
