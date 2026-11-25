@@ -554,8 +554,11 @@ atendam (por exemplo, `unittest` puro, ou um executor Node incomum),
 `coverageTools.commands` mapeia o caminho do projeto, relativo à pasta do
 workspace, para uma linha de comando. O texto `${coverageDir}` é trocado pelo
 diretório temporário, e a extensão procura ali um relatório reconhecido ao
-fim. Um diretório listado aqui vira projeto mesmo que nenhum adaptador o
-reconheça, e aceita apenas execução completa. É a saída para qualquer
+fim; se a linha de comando não usa `${coverageDir}` (ferramentas que não
+deixam escolher onde gravam), a extensão procura o relatório no diretório do
+projeto, e só conta o que foi gravado durante a execução. Um diretório
+listado aqui vira projeto mesmo que nenhum adaptador o reconheça, e aceita
+apenas execução completa. É a saída para qualquer
 estrutura que as regras automáticas não cubram.
 
 - A configuração é por pasta do workspace (escopo de recurso): em multi-root,
@@ -563,7 +566,10 @@ estrutura que as regras automáticas não cubram.
 - Um diretório com comando personalizado **suprime os projetos descobertos
   dentro dele**, de qualquer ecossistema. É uma escolha explícita do usuário
   de que aquele comando roda tudo ali, então nada é executado nem contado
-  duas vezes.
+  duas vezes. A regra de aninhamento (seção 5.2) é aplicada antes, sobre
+  todos os projetos descobertos como se não houvesse comandos personalizados;
+  só depois cada comando substitui os projetos que restaram dentro do seu
+  diretório (assim, um orquestrador descartado continua descartado).
 
 ### 5.8 Workspace não confiável
 

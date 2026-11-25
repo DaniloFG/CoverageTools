@@ -175,13 +175,12 @@ test('.cs files are read in batches with the event loop free in between, and the
   for (let i = 0; i < 45; i++) files[`T/F${String(i).padStart(2, '0')}.cs`] = i % 2 === 0 ? TEST_CS : HELPER_CS;
   const root = await tree(files);
   const fs = countingFs();
-  let immediates = 0;
+  let stopped = false;
   let readsAtFirstYield = -1;
   const tick = (): void => {
     setImmediate(() => {
-      immediates++;
       if (readsAtFirstYield < 0 && fs.reads.some(r => r.endsWith('.cs'))) readsAtFirstYield = fs.reads.filter(r => r.endsWith('.cs')).length;
-      if (immediates < 1000) tick();
+      if (!stopped) tick();
     });
   };
   tick();
@@ -189,7 +188,7 @@ test('.cs files are read in batches with the event loop free in between, and the
   const statMtime = async (p: string) => mtimes.get(p) ?? 1;
   const cache = new Map();
   const state = await discover([root], fs, () => settings(), adapters, { statMtime, testFileCache: cache });
-  immediates = 1000;
+  stopped = true;
   expect(state.testFiles.get(state.projects[0].key)).toHaveLength(23);
   expect(readsAtFirstYield).toBeGreaterThan(0);
   expect(readsAtFirstYield).toBeLessThanOrEqual(20);
@@ -569,4 +568,115 @@ test('refreshFile updates one test file without a new discovery, and asks for on
   expect((await refreshFile(state, at(root, 'py/test_a.py'), fs)).rediscover).toBe(true);
   // A state discover did not build cannot be refreshed.
   expect((await refreshFile({ ...state }, at(root, 'web/a.test.js'), fs)).rediscover).toBe(true);
+});
+
+test('custom commands apply after the nesting rule', async () => {
+  const files = {
+    'package.json': JEST('root'),
+    'root.test.js': '',
+    'packages/a/package.json': JEST('a'),
+    'packages/a/a.test.js': '',
+  };
+  const commands = { 'packages/a': 'make a' };
+  const root = await tree(files);
+  // inner: the root stays dropped as the orchestrator of a, as without the command; a becomes the
+  // custom project, so the tests of a run exactly once in Run All.
+  const inner = await run([root], settings({ commands }));
+  expect(summary(inner, root)).toEqual([['custom', 'packages/a']]);
+  // outer: the nesting rule keeps the root and drops a; the custom command, configured on
+  // purpose, still adds its project. The root's test files inside it are not offered for partial runs.
+  const outer = await run([root], settings({ commands, nestedProjects: 'outer' }));
+  expect(summary(outer, root)).toEqual([
+    ['jest', '.'],
+    ['custom', 'packages/a'],
+  ]);
+  expect(outer.testFiles.get(outer.projects[0].key)).toEqual([at(root, 'root.test.js')]);
+});
+
+test('resolveTarget on a directory with nested projects also runs the tests of the enclosing project there', async () => {
+  const root = await tree({
+    'package.json': JEST('web'),
+    'scripts/foo.test.js': '',
+    'scripts/py/pyproject.toml': '',
+    'scripts/py/test_tool.py': PY_TEST,
+  });
+  const state = await run([root]);
+  const [jest, py] = state.projects;
+  expect(resolveTarget(at(root, 'scripts'), true, state)).toEqual([
+    { project: py, target: { kind: 'full' } },
+    { project: jest, target: { kind: 'partial', paths: [at(root, 'scripts')] } },
+  ]);
+});
+
+test('nested workspace folders: a path belongs to the innermost folder, whose settings apply', async () => {
+  const outer = await tree({
+    'package.json': JSON.stringify({ name: 'outer' }),
+    'web/package.json': JEST('web'),
+    'inner/app/package.json': JEST('app'),
+    'inner/app/gen/x.test.js': '',
+    'inner/app/a.test.js': '',
+    'inner/tests/test_a.py': PY_TEST,
+  });
+  const inner = at(outer, 'inner');
+  const byFolder = new Map([
+    [outer, settings()],
+    [inner, settings({ exclude: [...DEFAULT_SETTINGS.exclude, '**/gen/**'] })],
+  ]);
+  const fs = nodeFsReader();
+  let state = await run([outer, inner], f => byFolder.get(f) ?? settings(), fs);
+  expect(state.projects.map(p => [p.name, p.meta.workspaceFolder])).toEqual([
+    ['web', outer],
+    ['inner', inner], // Python without a marker: the (inner) workspace folder
+    ['app', inner],
+  ]);
+  const app = state.projects[2];
+  expect(state.testFiles.get(app.key)).toEqual([at(outer, 'inner/app/a.test.js')]);
+  await writeFile(at(outer, 'inner/app/gen/y.test.js'), '');
+  expect(await refreshFile(state, at(outer, 'inner/app/gen/y.test.js'), fs)).toEqual({ state, rediscover: false });
+  await writeFile(at(outer, 'inner/app/b.test.js'), '');
+  state = (await refreshFile(state, at(outer, 'inner/app/b.test.js'), fs)).state;
+  expect(state.testFiles.get(app.key)).toEqual([at(outer, 'inner/app/a.test.js'), at(outer, 'inner/app/b.test.js')]);
+});
+
+test('refreshFile: projects or solutions in a directory moved in or deleted ask for a new discovery', async () => {
+  const root = await tree({
+    'package.json': JEST('root'),
+    'root.test.js': '',
+    'net/T/T.csproj': VSTEST_CSPROJ,
+    'sols/All.sln': sln('..\\net\\T\\T.csproj'),
+  });
+  const fs = nodeFsReader();
+  const state = await run([root], settings(), fs);
+  expect(state.runnablePaths.has(at(root, 'sols/All.sln'))).toBe(true);
+  expect(state.projects.map(p => p.name)).toEqual(['root', 'T']);
+
+  // A Jest package moved in (the root project would own its test files).
+  await mkdir(at(root, 'packages/c'), { recursive: true });
+  await writeFile(at(root, 'packages/c/package.json'), JEST('c'));
+  await writeFile(at(root, 'packages/c/c.test.js'), '');
+  expect((await refreshFile(state, at(root, 'packages/c'), fs)).rediscover).toBe(true);
+  // A new discovery drops the root as the orchestrator of c.
+  expect((await run([root], settings(), fs)).projects.map(p => p.name)).toEqual(['T', 'c']);
+
+  // A directory with a test .csproj moved in.
+  await mkdir(at(root, 'more/U'), { recursive: true });
+  await writeFile(at(root, 'more/U/U.csproj'), VSTEST_CSPROJ);
+  expect((await refreshFile(state, at(root, 'more'), fs)).rediscover).toBe(true);
+
+  // A deleted directory that held only a solution.
+  await rm(at(root, 'sols'), { recursive: true });
+  expect((await refreshFile(state, at(root, 'sols'), fs)).rediscover).toBe(true);
+});
+
+test('refreshFile keeps the spelling of a known path and normalizes a new one', async () => {
+  const root = await tree({ 'web/package.json': JEST('web'), 'web/a.test.js': '' });
+  const fs = nodeFsReader();
+  const state = await run([root], settings(), fs);
+  const key = state.projects[0].key;
+  const odd = (name: string) => `${at(root, 'web')}${path.sep}.${path.sep}${name}`;
+  expect(await refreshFile(state, odd('a.test.js'), fs)).toEqual({ state, rediscover: false });
+  await writeFile(at(root, 'web/b.test.js'), '');
+  const next = (await refreshFile(state, odd('b.test.js'), fs)).state;
+  expect(next.testFiles.get(key)).toEqual([at(root, 'web/a.test.js'), at(root, 'web/b.test.js')]);
+  expect(next.runnablePaths.has(at(root, 'web/b.test.js'))).toBe(true);
 });
