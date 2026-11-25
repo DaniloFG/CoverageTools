@@ -17,6 +17,7 @@ export function keyPath(key: string): string {
   if (separator < 0) return key;
   const rest = key.slice(separator + 1);
   if (key.slice(0, separator) !== 'unowned') return rest;
-  const hash = rest.indexOf('#');
+  // The signature never holds a `#`, while the results root may (`…/C#/Api/TestResults`).
+  const hash = rest.lastIndexOf('#');
   return hash < 0 ? rest : rest.slice(0, hash);
 }

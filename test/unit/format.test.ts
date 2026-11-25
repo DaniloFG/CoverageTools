@@ -19,3 +19,8 @@ test('a store key reads as its path, without the prefix or an unowned report sig
   expect(keyPath('unowned:/w/web/coverage#')).toBe('/w/web/coverage');
   expect(keyPath('plain')).toBe('plain');
 });
+
+test('an unowned key keeps a results root that contains #', () => {
+  expect(keyPath('unowned:/w/C#/Api/TestResults#Api')).toBe('/w/C#/Api/TestResults');
+  expect(keyPath('unowned:/w/C#/web/coverage#')).toBe('/w/C#/web/coverage');
+});
