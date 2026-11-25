@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { globToRegExp, matchesAny } from '../../src/glob';
+import { expandBraces, globToRegExp, matchesAny, oneGlob } from '../../src/glob';
 
 const m = (glob: string, path: string): boolean => globToRegExp(glob).test(path);
 
@@ -48,4 +48,18 @@ test('matchesAny compares with forward slashes', () => {
   expect(matchesAny('api/obj/x', excludes)).toBe(true);
   expect(matchesAny('api/TestResults/g/coverage.cobertura.xml', excludes)).toBe(false);
   expect(matchesAny('api/bin/x', [])).toBe(false);
+});
+
+test('expandBraces flattens nested brace groups into plain alternatives', () => {
+  expect(expandBraces('**/*.csproj')).toEqual(['**/*.csproj']);
+  expect(expandBraces('**/*.{js,ts}')).toEqual(['**/*.js', '**/*.ts']);
+  expect(expandBraces('{a,b/*.{x,y}}/c')).toEqual(['a/c', 'b/*.x/c', 'b/*.y/c']);
+  expect(expandBraces('{a,b}{1,2}')).toEqual(['a1', 'a2', 'b1', 'b2']);
+  expect(expandBraces('unclosed{a,b')).toEqual(['unclosed{a,b']);
+});
+
+test('oneGlob joins globs into one brace group without nesting, for VS Code', () => {
+  expect(oneGlob(['**/*.csproj'])).toBe('**/*.csproj');
+  expect(oneGlob(['**/*.csproj', '**/*.{js,ts}', '**/*.csproj'])).toBe('{**/*.csproj,**/*.js,**/*.ts}');
+  expect(oneGlob([])).toBeUndefined();
 });

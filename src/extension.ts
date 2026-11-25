@@ -1,57 +1,153 @@
 import { join } from 'node:path';
 import * as vscode from 'vscode';
+import { customAdapter } from './adapters/custom';
+import { ADAPTERS } from './adapters/index';
+import { createPythonAdapter } from './adapters/python';
+import type { Adapter, AdapterId, Project, RunTarget } from './adapters/types';
+import { RunQueue } from './runner/queue';
+import { runProject, type RunOutcome } from './runner/runProject';
+import { RunSuppressions } from './runner/suppression';
 import { CoverageStore } from './store';
+import { registerCommands } from './vscode/commands';
 import { readSettings } from './vscode/config';
+import { vscodeFsReader } from './vscode/fsReader';
+import { ProjectDiscovery } from './vscode/projects';
 import { Publisher } from './vscode/publisher';
 import { selectedPythonInterpreter } from './vscode/pythonExtension';
+import { RunnablePathsContext } from './vscode/runnablePaths';
 import { ReportWatcher } from './vscode/reportWatcher';
 import { StatusBar } from './vscode/statusBar';
 import { ParserClient } from './worker/client';
 
 export interface ExtensionApi {
   store: CoverageStore;
+  /** Settles when the first project discovery has finished (logged as `Discovery finished: N project(s).`). */
+  ready: Promise<void>;
+  /** Settles once the report watchers are registered (logged as `Watching for coverage reports.`). */
+  watching: Promise<void>;
 }
+
+const timers = { set: (fn: () => void, ms: number) => setTimeout(fn, ms), clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
 
 export function activate(context: vscode.ExtensionContext): ExtensionApi {
   const store = new CoverageStore();
   const publisher = new Publisher(store);
-  const statusBar = new StatusBar(store, publisher);
+  const queue = new RunQueue();
+  const statusBar = new StatusBar(store, publisher, queue);
   // The worker starts only when the first report arrives.
   const parser = new ParserClient(join(context.extensionPath, 'dist', 'worker.js'));
-  // Created on the first message, so that a quiet session has no output channel.
+  const c8Bin = join(context.extensionPath, 'node_modules', 'c8', 'bin', 'c8.js');
+  // Created on the first message, so that nothing is created during activation.
   let channel: vscode.LogOutputChannel | undefined;
-  const log = (msg: string): void => {
-    channel ??= vscode.window.createOutputChannel('Coverage Tools', { log: true });
-    channel.info(msg);
-  };
+  const output = (): vscode.LogOutputChannel => (channel ??= vscode.window.createOutputChannel('Coverage Tools', { log: true }));
+  const log = (msg: string): void => output().info(msg);
+  const isTrusted = (): boolean => vscode.workspace.isTrusted;
+
+  // The Python extension's selection is read when a run is planned, never at activation.
+  const python = createPythonAdapter({ selectedInterpreter: async dir => selectedPythonInterpreter(vscode.Uri.file(dir)) });
+  const adapters: readonly Adapter[] = ADAPTERS.map(a => (a.id === 'python' ? python : a));
+  const runAdapters = new Map<AdapterId, Adapter>([...adapters, customAdapter].map(a => [a.id, a]));
+
+  const suppressions = new RunSuppressions(timers);
+  const runnable = new RunnablePathsContext(
+    p => vscode.Uri.file(p).fsPath,
+    value => void vscode.commands.executeCommand('setContext', 'coverageTools.runnablePaths', value),
+  );
+  const discovery = new ProjectDiscovery({
+    makeFs: vscodeFsReader,
+    adapters,
+    settingsOf: readSettings,
+    log,
+    // No cost unless the channel's log level is Trace (`--log DaniloFG.coverage-tools:trace`).
+    trace: msg => channel?.trace(msg),
+    onState: state => runnable.update(state.runnablePaths),
+  });
+
   // Reading static reports runs no code, so it stays on in untrusted workspaces; converting
   // coverage.py data runs an interpreter, so the watcher skips it there.
   const watcher = new ReportWatcher({
     store,
     parser,
     settingsOf: readSettings,
-    projects: () => [],
-    isSuppressed: () => false,
-    isTrusted: () => vscode.workspace.isTrusted,
+    projects: () => discovery.projects(),
+    isSuppressed: key => suppressions.isSuppressed(key),
+    isTrusted,
     pythonSelection: selectedPythonInterpreter,
+    // Only asks whether a venv interpreter exists; no adapter caches anything on this reader.
+    fs: vscodeFsReader(),
     log,
   });
+
+  const run = (project: Project, target: RunTarget, signal: AbortSignal): Promise<RunOutcome> => {
+    if (!isTrusted()) return Promise.resolve({ status: 'cancelled' });
+    const lines = lineLogger(log);
+    // A queued run cancelled before it started only reports that it finished.
+    if (!signal.aborted) log(`Running coverage for ${project.name} (${target.kind === 'full' ? 'all tests' : target.paths.join(', ')}).`);
+    return runProject(project, target, {
+      adapters: runAdapters,
+      store,
+      parser,
+      // A fresh reader per run: adapters cache imported files per reader object.
+      fs: vscodeFsReader(),
+      settings: readSettings(vscode.Uri.file(project.dir)),
+      roots: (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
+      c8Bin,
+      output: lines.write,
+      suppress: key => suppressions.suppress(key),
+    }, signal).then(outcome => {
+      lines.flush();
+      // Tells when a run has ended, and how (tests wait on this line too).
+      log(`Finished coverage for ${project.name}: ${outcome.status}.`);
+      return outcome;
+    });
+  };
+
   context.subscriptions.push(
     watcher,
+    discovery,
     parser,
     publisher,
     statusBar,
+    suppressions,
+    { dispose: () => queue.cancelAll() },
     { dispose: () => channel?.dispose() },
     vscode.commands.registerCommand('coverageTools.show', () => showCoverage(store, publisher)),
     vscode.commands.registerCommand('coverageTools.clear', async () => {
       store.clear();
       await publisher.close();
     }),
+    registerCommands({ discovery, queue, runProject: run, log, showOutput: () => output().show(true), isTrusted }),
   );
-  return { store };
+
+  // Nothing is read during activation: discovery starts once activate has returned.
+  let watching!: () => void;
+  const watchingPromise = new Promise<void>(resolve => { watching = resolve; });
+  const pending = setImmediate(() => {
+    log('Watching for coverage reports.');
+    watching();
+    discovery.start();
+  });
+  context.subscriptions.push({ dispose: () => clearImmediate(pending) });
+  return { store, ready: discovery.ready, watching: watchingPromise };
 }
 
 export function deactivate(): void {}
+
+/** Logs process output line by line (a log channel stamps every entry). */
+function lineLogger(log: (msg: string) => void): { write(chunk: string): void; flush(): void } {
+  let rest = '';
+  return {
+    write(chunk) {
+      const lines = (rest + chunk).split(/\r?\n/);
+      rest = lines.pop() ?? '';
+      for (const line of lines) log(line);
+    },
+    flush() {
+      if (rest !== '') log(rest);
+      rest = '';
+    },
+  };
+}
 
 async function showCoverage(store: CoverageStore, publisher: Publisher): Promise<void> {
   if (store.merged().length === 0) {

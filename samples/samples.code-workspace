@@ -1,0 +1,7 @@
+{
+  "folders": [
+    { "path": "node-jest" },
+    { "path": "python-pytest" },
+    { "path": "dotnet-vstest-coverlet" }
+  ]
+}

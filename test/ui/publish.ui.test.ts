@@ -1,7 +1,8 @@
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import {
-  closeAll, copyWorkspace, COVERAGE_ROW, COVERAGE_VIEW, launchVSCode, lcov, waitFor, writeReportUntil, type VSCodeSession,
+  closeAll, copyWorkspace, COVERAGE_ROW, COVERAGE_VIEW, launchVSCode, lcov, waitFor, waitForLoaded, waitUntilWatching, writeReport,
+  type VSCodeSession,
 } from './harness';
 
 const repoRoot = resolve(import.meta.dirname, '..', '..');
@@ -18,7 +19,10 @@ beforeEach(async () => {
   const workspace = await copyWorkspace(fixture);
   s = await launchVSCode({ extensionPath: repoRoot, workspace });
   // Seeds the store the way a user would: a report written by a run made outside the extension.
-  await writeReportUntil(join(workspace, 'coverage', 'lcov.info'), REPORT, () => s.page.locator(STATUS_ITEM).isVisible());
+  await waitUntilWatching(s, [workspace]);
+  const report = join(workspace, 'coverage', 'lcov.info');
+  await writeReport(report, REPORT);
+  await waitForLoaded(s, report);
 });
 
 afterEach((ctx) => closeAll(ctx));

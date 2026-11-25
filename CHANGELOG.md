@@ -19,26 +19,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Planned
 
-- `Run All Coverage` command to run every test project in the workspace.
-- `Run Coverage Here` in the Explorer right-click menu for a test project,
-  folder, or test file.
-- .NET (C#) support for VSTest and Microsoft.Testing.Platform test projects,
-  using whichever coverage collector the project already has.
-- Node support for Jest and Vitest, with or without a `test` script, and for
-  any other tool (Mocha, AVA, `node --test`, …) through a bundled c8.
-- Python support for pytest and `unittest`, through pytest-cov or
-  coverage.py, including detection of coverage.py `.coverage` data files.
-- Single projects and monorepos handled without configuration.
 - Lightweight operation: no startup cost, no idle work, and report parsing
   off the main extension thread.
-- Read-only behaviour in untrusted workspaces.
-- Custom coverage command per project (`coverageTools.commands`).
 - Usage screenshots in the README, captured from the sample workspace.
 
 ### In progress
 
 - Implementation of the first release. The design is approved and the
   implementation plan is written.
+- .NET (C#) support for Microsoft.Testing.Platform test projects, using the
+  platform's code coverage extension.
 
 ### Done
 
@@ -51,3 +41,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   them.
 - `Show Coverage` and `Clear Coverage` commands.
 - Status bar item with the accumulated total.
+- `Run All Coverage` command to run every test project in the workspace, one
+  at a time, with progress and cancellation (Command Palette and Testing view
+  title).
+- `Run Coverage Here` in the Explorer right-click menu for a test project,
+  solution, folder, or test file; it appears only where there are tests to
+  run.
+- .NET (C#) support for VSTest test projects, using whichever coverage
+  collector the project already has.
+- Node support for Jest and Vitest, with or without a `test` script, and for
+  any other tool (Mocha, AVA, `node --test`, …) through a bundled c8.
+- Python support for pytest and `unittest`, through pytest-cov or
+  coverage.py, including detection of coverage.py `.coverage` data files.
+- Single projects and monorepos handled without configuration
+  (`coverageTools.nestedProjects` for nested projects).
+- Read-only behaviour in untrusted workspaces: no command runs, reports are
+  still read.
+- Custom coverage command per project (`coverageTools.commands`).

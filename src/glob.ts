@@ -79,3 +79,26 @@ export function matchesAny(path: string, globs: readonly string[]): boolean {
   const normalized = path.replace(/\\/g, '/');
   return globs.some(g => globToRegExp(g).test(normalized));
 }
+
+/** The plain globs a glob with brace groups stands for (nested groups included), in order. */
+export function expandBraces(glob: string): string[] {
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] !== '{') continue;
+    const close = closingBrace(glob, i);
+    if (close < 0) return [glob];
+    const head = glob.slice(0, i);
+    const tails = expandBraces(glob.slice(close + 1));
+    return alternatives(glob.slice(i + 1, close)).flatMap(alt => expandBraces(alt).flatMap(a => tails.map(t => head + a + t)));
+  }
+  return [glob];
+}
+
+/**
+ * `globs` as one glob with at most one brace group (VS Code's glob matcher does not nest them);
+ * undefined for no globs.
+ */
+export function oneGlob(globs: readonly string[]): string | undefined {
+  const flat = [...new Set(globs.flatMap(expandBraces))];
+  if (flat.length === 0) return undefined;
+  return flat.length === 1 ? flat[0] : `{${flat.join(',')}}`;
+}

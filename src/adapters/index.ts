@@ -1,3 +1,4 @@
+import { dotnetMtpAdapter } from './dotnetMtp';
 import { dotnetVstestAdapter } from './dotnetVstest';
 import { jestAdapter } from './jest';
 import { nodeGenericAdapter } from './nodeGeneric';
@@ -16,4 +17,5 @@ export const ADAPTERS: readonly Adapter[] = Object.freeze([
   nodeGenericAdapter,
   pythonAdapter,
   dotnetVstestAdapter,
+  dotnetMtpAdapter,
 ]);

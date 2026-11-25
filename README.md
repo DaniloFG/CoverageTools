@@ -160,12 +160,12 @@ built to these rules, and each release is checked against them:
 | `coverageTools.watch.globs` | the report patterns listed above | Where to look for coverage reports |
 | `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/__pycache__/**` | Ignored during discovery and watching |
 | `coverageTools.nestedProjects` | `inner` | For nested test projects, run the inner ones (`inner`) or the outer one (`outer`) |
-| `coverageTools.dotnet.collector` | `""` (auto-detect) | Force the value passed to `--collect` |
-| `coverageTools.dotnet.extraArgs` | `[]` | Extra arguments for `dotnet test` |
+| `coverageTools.dotnet.collector` | `""` (auto-detect) | Force the value passed to `--collect` (VSTest) |
+| `coverageTools.dotnet.extraArgs` | `[]` | Extra arguments for `dotnet test` (VSTest) or for the test application (Microsoft.Testing.Platform) |
 | `coverageTools.node.extraArgs` | `[]` | Extra arguments for the Node test command |
 | `coverageTools.python.interpreter` | `""` (auto-detect) | Python interpreter to use |
 | `coverageTools.python.extraArgs` | `[]` | Extra arguments for the Python test runner |
-| `coverageTools.commands` | `{}` | Your own coverage command for a project, keyed by its path; `${coverageDir}` is replaced with the folder the report must be written to |
+| `coverageTools.commands` | `{}` | Your own coverage command for a project, keyed by its path relative to the workspace folder; `${coverageDir}` is replaced with the folder the report must be written to |
 
 ## Requirements
 
@@ -194,6 +194,21 @@ built to these rules, and each release is checked against them:
   that appear.
 - **Node tools other than Jest and Vitest** run as a whole project only.
 - **Nothing is persisted.** Coverage starts empty every time VS Code starts.
+- **coverage.py data files are converted automatically.** In a trusted
+  workspace, a coverage.py `.coverage` file that appears in the workspace is
+  converted with the project's Python interpreter without any action from you.
+- **Very large partial selections on Windows.** Running a folder with a great
+  many test files at once can exceed the Windows command-line length limit;
+  run the whole project instead.
+- **TypeScript run through tsx or ts-node under c8** shows a few extra
+  functions and branches on line 1, and marks the `export function` line of a
+  function that never ran as covered.
+- **.NET partial runs select test classes by name.** Tests in generic test
+  fixtures or inherited from a base class may not be selected, and a class
+  name that is a prefix of another class in another namespace can select
+  both.
+- **Multi-targeted .NET test projects** produce one report per target
+  framework; only the newest framework's report is loaded.
 
 ## Feature status
 
@@ -204,15 +219,15 @@ built to these rules, and each release is checked against them:
 | Accumulated coverage in the native UI | Done (unreleased) |
 | Show Coverage and Clear Coverage | Done (unreleased) |
 | Automatic detection of coverage reports | Done (unreleased) |
-| Run All Coverage | Planned |
-| Run Coverage Here (Explorer right-click) | Planned |
-| .NET support: VSTest | Planned |
-| .NET support: Microsoft.Testing.Platform | Planned |
-| Node support: Jest | Planned |
-| Node support: Vitest | Planned |
-| Node support: any other tool, through c8 | Planned |
-| Python support: pytest and unittest | Planned |
-| Custom command per project | Planned |
+| Run All Coverage | Done (unreleased) |
+| Run Coverage Here (Explorer right-click) | Done (unreleased) |
+| .NET support: VSTest | Done (unreleased) |
+| .NET support: Microsoft.Testing.Platform | In progress |
+| Node support: Jest | Done (unreleased) |
+| Node support: Vitest | Done (unreleased) |
+| Node support: any other tool, through c8 | Done (unreleased) |
+| Python support: pytest and unittest | Done (unreleased) |
+| Custom command per project | Done (unreleased) |
 | Status bar total | Done (unreleased) |
 | Usage screenshots in this README | Planned |
 

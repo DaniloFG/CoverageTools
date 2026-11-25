@@ -28,6 +28,19 @@
   "contributes": {
     "commands": [
       {
+        "command": "coverageTools.runAll",
+        "title": "Run All Coverage",
+        "category": "Coverage Tools",
+        "icon": "$(run-all-coverage)",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "coverageTools.runHere",
+        "title": "Run Coverage Here",
+        "category": "Coverage Tools",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
         "command": "coverageTools.show",
         "title": "Show Coverage",
         "category": "Coverage Tools"
@@ -38,6 +51,28 @@
         "category": "Coverage Tools"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "coverageTools.runHere",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "coverageTools.runHere",
+          "when": "isWorkspaceTrusted && resourcePath in coverageTools.runnablePaths",
+          "group": "2_workspace@90"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "coverageTools.runAll",
+          "when": "view == workbench.view.testing",
+          "group": "navigation@90"
+        }
+      ]
+    },
     "configuration": {
       "title": "Coverage Tools",
       "properties": {
@@ -79,6 +114,68 @@
             "**/__pycache__/**"
           ],
           "description": "Glob patterns, relative to each workspace folder, of paths ignored during discovery and watching."
+        },
+        "coverageTools.nestedProjects": {
+          "type": "string",
+          "enum": [
+            "inner",
+            "outer"
+          ],
+          "enumDescriptions": [
+            "Run the inner projects; the outer project is not run.",
+            "Run the outer project only; it is expected to run the inner ones."
+          ],
+          "default": "inner",
+          "scope": "resource",
+          "description": "When test projects of the same ecosystem are nested, run the inner ones (`inner`) or the outer one (`outer`)."
+        },
+        "coverageTools.dotnet.collector": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Forces the value passed to `--collect` when running VSTest projects (for example `XPlat Code Coverage`). Empty: chosen from the project's packages."
+        },
+        "coverageTools.dotnet.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments for `dotnet test` (VSTest) or for the test application (Microsoft.Testing.Platform)."
+        },
+        "coverageTools.node.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments for the Node test command (Jest, Vitest, or the test script run under c8)."
+        },
+        "coverageTools.python.interpreter": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Python interpreter used to run tests and convert `.coverage` files. Empty: the project's `.venv` or `venv`, then the interpreter selected in the Python extension, then `python3`."
+        },
+        "coverageTools.python.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments for the Python test runner (pytest or unittest)."
+        },
+        "coverageTools.commands": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "scope": "resource",
+          "markdownDescription": "Your own coverage command per project: maps a project directory, relative to the workspace folder, to a command line run in that directory through the shell. `${coverageDir}` is replaced with a temporary directory where the command must write an Istanbul JSON, Cobertura or LCOV report. The directory becomes a project (full runs only) and replaces any project found inside it."
         }
       }
     }
