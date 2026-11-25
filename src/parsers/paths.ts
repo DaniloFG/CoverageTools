@@ -1,7 +1,10 @@
 import nodePath from 'node:path';
 import type { ParseContext } from './types';
 
-type PathImpl = Pick<typeof nodePath, 'isAbsolute' | 'join' | 'normalize' | 'resolve' | 'sep'>;
+type PathImpl = Pick<typeof nodePath, 'dirname' | 'isAbsolute' | 'join' | 'normalize' | 'relative' | 'resolve' | 'sep'>;
+
+/** How many ancestors of the report directory are tried when no workspace root contains it. */
+const MAX_ANCESTORS_OUTSIDE_ROOTS = 8;
 
 /**
  * The part after a deterministic-build prefix, or undefined. Deterministic .NET builds replace each
@@ -26,11 +29,52 @@ function normalize(p: string, pathImpl: PathImpl): string {
   return n;
 }
 
+/** True when `dir` is `root` or lies below it. */
+function isWithin(dir: string, root: string, pathImpl: PathImpl): boolean {
+  const rel = pathImpl.relative(root, dir);
+  return rel === '' || (!rel.startsWith('..') && !pathImpl.isAbsolute(rel));
+}
+
+const searchDirCache = new WeakMap<ParseContext, { pathImpl: PathImpl; dirs: readonly string[] }>();
+
 /**
- * Resolves a path written in a coverage report to an existing file, or undefined.
- * Tries, in order: the path itself when absolute; each `<source>` + path; the report directory + path;
- * each workspace root + path; and, for deterministic-build paths (`/_/...`, also after a source),
- * each root + the remainder.
+ * The directories a relative report path is tried against, nearest first: the report directory and
+ * its ancestors up to and including the innermost root that contains it (or, when no root contains it,
+ * up to MAX_ANCESTORS_OUTSIDE_ROOTS ancestors or the filesystem root), then the roots in the given order.
+ */
+function searchDirs(ctx: ParseContext, pathImpl: PathImpl): readonly string[] {
+  const cached = searchDirCache.get(ctx);
+  if (cached !== undefined && cached.pathImpl === pathImpl) return cached.dirs;
+
+  const dirs: string[] = [];
+  const inside = ctx.roots.some(root => isWithin(ctx.reportDir, root, pathImpl));
+  let dir = pathImpl.normalize(ctx.reportDir);
+  for (let up = 0; ; up++) {
+    dirs.push(dir);
+    if (ctx.roots.some(root => pathImpl.relative(root, dir) === '')) break;
+    if (!inside && up >= MAX_ANCESTORS_OUTSIDE_ROOTS) break;
+    const parent = pathImpl.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  for (const root of ctx.roots) {
+    if (!dirs.some(d => pathImpl.relative(root, d) === '')) dirs.push(root);
+  }
+  searchDirCache.set(ctx, { pathImpl, dirs });
+  return dirs;
+}
+
+/**
+ * Resolves a path written in a coverage report to an existing file, or undefined. Tries, in order:
+ * 1. an absolute path as it is;
+ * 2. for a relative path, each `<source>` + path (a relative source is taken from the report directory);
+ * 3. for a relative path, the report directory and each of its ancestors + path, walking upward and
+ *    stopping at (and including) the innermost workspace root that contains the report directory, or,
+ *    when no root contains it (e.g. a temporary directory), after 8 ancestors or at the filesystem root;
+ * 4. for a relative path, each workspace root + path, in the order given (callers put the owning
+ *    project's root first, so it is never re-sorted);
+ * 5. for deterministic-build paths (`/_/`, `/_1/`... in the path or in a `<source>`), the remainder
+ *    against the same directories as in steps 3 and 4.
  */
 export function resolveReportPath(
   raw: string,
@@ -55,14 +99,13 @@ export function resolveReportPath(
       const sourceRest = deterministicRest(source);
       if (sourceRest !== undefined) deterministic.push(pathImpl.join(sourceRest, raw));
     }
-    if ((found = exists(pathImpl.join(ctx.reportDir, raw)))) return found;
-    for (const root of ctx.roots) {
-      if ((found = exists(pathImpl.join(root, raw)))) return found;
+    for (const dir of searchDirs(ctx, pathImpl)) {
+      if ((found = exists(pathImpl.join(dir, raw)))) return found;
     }
   }
   for (const rest of deterministic) {
-    for (const root of ctx.roots) {
-      if ((found = exists(pathImpl.join(root, rest)))) return found;
+    for (const dir of searchDirs(ctx, pathImpl)) {
+      if ((found = exists(pathImpl.join(dir, rest)))) return found;
     }
   }
   return undefined;

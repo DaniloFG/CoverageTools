@@ -99,6 +99,16 @@ test('records for files that do not exist are dropped and counted', () => {
   expect(r.dropped).toBe(1);
 });
 
+test('with two roots, a relative SF resolves into the root that holds the report', () => {
+  const c: ParseContext = {
+    reportDir: '/w/samples/node-nyc/coverage',
+    roots: ['/w/samples/node-mocha', '/w/samples/node-nyc'],
+    fileExists: p => p === '/w/samples/node-mocha/src/calc.js' || p === '/w/samples/node-nyc/src/calc.js',
+  };
+  const r = parseLcov('SF:src/calc.js\nDA:1,1\nend_of_record\n', c);
+  expect(r.files.map(f => f.path)).toEqual(['/w/samples/node-nyc/src/calc.js']);
+});
+
 test('empty input is a valid report with zero files', () => {
   expect(parseLcov('', ctx)).toEqual({ files: [], signature: '', dropped: 0 });
 });
