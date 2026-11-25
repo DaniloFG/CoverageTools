@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { formatPercent, keyPath } from '../format';
-import type { Count } from '../model';
+import { coverageFraction, formatPercent, keyPath, projectLabel, type DisplayedPercent } from '../format';
+import type { FileSummary } from '../model';
 import type { CoverageStore } from '../store';
 
 /** What the status bar needs from the run queue. */
@@ -9,12 +9,22 @@ export interface BusySource {
   onDidChangeBusy(listener: (busy: boolean) => void): { dispose(): void };
 }
 
-function percent(c: Count): string {
-  return formatPercent(c.covered, c.total);
+/** VS Code's own setting for which percentage its coverage UI shows. */
+const DISPLAYED_PERCENT = 'testing.displayedCoveragePercent';
+
+/** The percentage of a summary exactly as the native Test Coverage view writes it. */
+function percent(s: FileSummary): string {
+  const mode = vscode.workspace.getConfiguration('testing').get<DisplayedPercent>('displayedCoveragePercent') ?? 'totalCoverage';
+  return formatPercent(coverageFraction(s, mode));
 }
 
-function projectLabel(key: string): string {
-  return vscode.workspace.asRelativePath(keyPath(key), true);
+function isEmpty(s: FileSummary): boolean {
+  return s.statements.total + s.branches.total + s.declarations.total === 0;
+}
+
+function labelOf(key: string): string {
+  const folders = (vscode.workspace.workspaceFolders ?? []).map(f => ({ name: f.name, fsPath: f.uri.fsPath }));
+  return projectLabel(keyPath(key), folders);
 }
 
 /** Tells when the published coverage settled after a burst of store changes (see `Publisher`). */
@@ -23,8 +33,10 @@ export interface SettleSource {
 }
 
 /**
- * Status bar item with the accumulated line total; clicking it runs Show Coverage. It is recomputed
- * once per settled burst of store changes (the publisher's debounce), never per mutation.
+ * Status bar item with the accumulated total; clicking it runs Show Coverage. The total is the
+ * percentage the native Test Coverage view shows for the root of its tree (same formula, same
+ * decimals, same `testing.displayedCoveragePercent` setting). It is recomputed once per settled
+ * burst of store changes (the publisher's debounce), never per mutation.
  */
 export class StatusBar {
   private readonly item: vscode.StatusBarItem;
@@ -36,6 +48,9 @@ export class StatusBar {
     this.item.command = 'coverageTools.show';
     this.subscriptions.push(settled.onDidSettle(() => this.update()));
     if (queue) this.subscriptions.push(queue.onDidChangeBusy(() => this.update()));
+    this.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration(DISPLAYED_PERCENT)) this.update();
+    }));
     this.update();
   }
 
@@ -45,24 +60,24 @@ export class StatusBar {
   }
 
   private update(): void {
-    const totals = this.store.totals();
+    const totals = this.store.summary();
     const busy = this.queue?.busy ?? false;
-    if (totals.total === 0 && !busy) {
+    if (isEmpty(totals) && !busy) {
       this.item.hide();
       return;
     }
     const icon = busy ? '$(sync~spin)' : '$(beaker)';
-    this.item.text = totals.total === 0 ? icon : `${icon} ${percent(totals)}`;
+    this.item.text = isEmpty(totals) ? icon : `${icon} ${percent(totals)}`;
     this.item.tooltip = this.tooltip(totals, busy);
     this.item.show();
   }
 
-  private tooltip(totals: Count, busy: boolean): string {
+  private tooltip(totals: FileSummary, busy: boolean): string {
     const lines: string[] = [];
-    if (totals.total > 0) lines.push(`Coverage Tools: ${percent(totals)} of lines covered`);
+    if (!isEmpty(totals)) lines.push(`Coverage Tools: ${percent(totals)} covered`);
     for (const key of this.store.keys().sort()) {
-      const t = this.store.totalsOf(key);
-      if (t && t.total > 0) lines.push(`${projectLabel(key)}: ${percent(t)}`);
+      const t = this.store.summaryOf(key);
+      if (t && !isEmpty(t)) lines.push(`${labelOf(key)}: ${percent(t)}`);
     }
     if (busy) lines.push('Running coverage…');
     lines.push('Click to show the accumulated coverage');

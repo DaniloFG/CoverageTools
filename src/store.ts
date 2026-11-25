@@ -13,6 +13,8 @@ export class CoverageStore {
   private mergedCache: readonly MergedEntry[] | undefined;
   private totalsCache: Count | undefined;
   private readonly projectTotalsCache = new Map<string, Count>();
+  private summaryCache: FileSummary | undefined;
+  private readonly projectSummaryCache = new Map<string, FileSummary>();
 
   /** Replaces everything a project holds. An empty list keeps the project, with no files. */
   replace(key: string, files: readonly FileCoverageData[]): void {
@@ -109,6 +111,27 @@ export class CoverageStore {
     return { ...totals };
   }
 
+  /**
+   * Statement, branch and declaration totals over `merged()`: what VS Code adds up for the root of
+   * its coverage tree. Cached until the next change.
+   */
+  summary(): FileSummary {
+    this.summaryCache ??= addSummaries(this.merged().map(e => e.summary));
+    return copySummary(this.summaryCache);
+  }
+
+  /** `summary()` over one project's own files (before the union with other projects); undefined for an unknown key. */
+  summaryOf(key: string): FileSummary | undefined {
+    const files = this.projects.get(key);
+    if (!files) return undefined;
+    let summary = this.projectSummaryCache.get(key);
+    if (!summary) {
+      summary = addSummaries(files.map(summarize));
+      this.projectSummaryCache.set(key, summary);
+    }
+    return copySummary(summary);
+  }
+
   onDidChange(listener: () => void): { dispose(): void } {
     const wrapped = (): void => listener();
     this.listeners.add(wrapped);
@@ -119,6 +142,8 @@ export class CoverageStore {
     this.mergedCache = undefined;
     this.totalsCache = undefined;
     this.projectTotalsCache.clear();
+    this.summaryCache = undefined;
+    this.projectSummaryCache.clear();
     for (const listener of [...this.listeners]) {
       try {
         listener();
@@ -127,4 +152,19 @@ export class CoverageStore {
       }
     }
   }
+}
+
+function addSummaries(summaries: readonly FileSummary[]): FileSummary {
+  const sum: FileSummary = { statements: { covered: 0, total: 0 }, branches: { covered: 0, total: 0 }, declarations: { covered: 0, total: 0 } };
+  for (const s of summaries) {
+    for (const kind of ['statements', 'branches', 'declarations'] as const) {
+      sum[kind].covered += s[kind].covered;
+      sum[kind].total += s[kind].total;
+    }
+  }
+  return sum;
+}
+
+function copySummary(s: FileSummary): FileSummary {
+  return { statements: { ...s.statements }, branches: { ...s.branches }, declarations: { ...s.declarations } };
 }

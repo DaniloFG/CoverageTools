@@ -103,8 +103,8 @@ test('the status bar shows the accumulated total', async () => {
   const item = s.page.locator(STATUS_ITEM);
   const text = await waitFor(async () => {
     const t = (await item.innerText({ timeout: 1_000 })).trim();
-    return t.includes('50%') ? t : undefined;
-  }, 30_000, 'the status bar item to show 50%');
-  expect(text).toBe('50%');
+    return t.includes('50.00%') ? t : undefined;
+  }, 30_000, 'the status bar item to show 50.00%');
+  expect(text).toBe('50.00%');
   expect(await item.locator('.codicon-beaker').count()).toBe(1);
 });

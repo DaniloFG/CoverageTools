@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeAll, expect, test } from 'vitest';
 import { existsSync } from 'node:fs';
 import {
-  closeAll, copySamples, coverageRowText, explorerMenu, launchVSCode, lcov, makeWorkspace, notificationTexts,
+  COVERAGE_ROW, COVERAGE_VIEW, closeAll, copySamples, coverageRowText, explorerMenu, launchVSCode, lcov, makeWorkspace, notificationTexts,
   outputChannelText, revealInExplorer, runFromExplorer, waitFor, waitForCoverageRow, waitForDiscovery, waitForLoaded,
   waitForOutput, waitUntilWatching, writeReport, type VSCodeSession,
 } from './harness';
@@ -13,6 +13,8 @@ const SAMPLES = ['node-jest', 'python-pytest', 'dotnet-vstest-coverlet'];
 const JEST = 'node-jest-sample';
 const RUN_ALL = 'Coverage Tools: Run All Coverage';
 const RUN_HERE = 'Run Coverage Here';
+/** The status bar entry of Coverage Tools (extension ID + item ID). */
+const STATUS_ITEM = '[id="DaniloFG.coverage-tools.coverageTools.status"]';
 /** .NET runs build the projects first: allow for a cold build in a fresh copy. */
 const DOTNET_RUN_MS = 240_000;
 
@@ -69,6 +71,22 @@ test('Run All Coverage runs every project and the view shows files from all thre
   await waitForCoverageRow(s, 'calc.js', '100.00%');
   await waitForCoverageRow(s, 'calc.py', '83.33%');
   await s.coverageViewText('Calculator.cs');
+
+  // The status bar total is the number the native view shows on the root row of its tree. Here the
+  // tree has a single root (the directory holding the three workspace folders), whose percentage VS
+  // Code computes itself from every published file.
+  const roots = s.page.locator(`${COVERAGE_VIEW} ${COVERAGE_ROW}[aria-level="1"]`);
+  expect(await roots.count()).toBe(1);
+  const rootPercent = /(\d+\.\d\d)%/.exec(await roots.first().innerText())?.[1];
+  expect(rootPercent).toBeDefined();
+  const status = await waitFor(async () => {
+    const t = (await s.page.locator(STATUS_ITEM).innerText({ timeout: 1_000 })).trim();
+    return t === `${rootPercent}%` ? t : undefined;
+  }, 10_000, `the status bar to show the root row's ${rootPercent}%`).catch(async (error: unknown) => {
+    throw new Error(`${(error as Error).message}; it shows ${await s.page.locator(STATUS_ITEM).innerText()}`, { cause: error });
+  });
+  expect(status).toBe(`${rootPercent}%`);
+
   const python = await coverageRowText(s, 'calc.py');
   const dotnet = await coverageRowText(s, 'Calculator.cs');
 
