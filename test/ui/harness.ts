@@ -15,9 +15,13 @@ export interface LaunchOptions {
   /**
    * For the harness's own tests: awaited at a fixed point of the launch ('launched': the process is
    * up, before the window is awaited; 'window': the first window exists), so a test can act there.
+   * 'closed-while-launching' reports that the launch found the session closed once the process was
+   * up and closed that process itself.
    */
-  onStage?(stage: 'launched' | 'window'): void | Promise<void>;
+  onStage?(stage: LaunchStage): void | Promise<void>;
 }
+
+export type LaunchStage = 'launched' | 'window' | 'closed-while-launching';
 
 export interface RunCommandOptions {
   /** The command opens a quick input (pick or input box): do not wait for the palette to close. */
@@ -254,7 +258,8 @@ export async function waitUntilWatching(s: VSCodeSession, folders: readonly stri
       for (let attempt = 1; ; attempt++) {
         await writeFile(probe, String(attempt));
         try {
-          await waitForOutput(s, `File event (create): ${probe}`, 2_000);
+          // Any line naming the probe counts (today `[trace] File event (create): <probe>`), whatever its wording.
+          await waitForOutput(s, (text) => text.includes(probe), 2_000);
           break;
         } catch (error) {
           if (attempt >= 30) throw new Error(`File events from ${folder} never reached the extension`, { cause: error });
@@ -441,6 +446,7 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
     await opts.onStage?.('launched');
     if (closing) {
       // close() ran while VS Code was starting and found no app to close: close this one now.
+      await opts.onStage?.('closed-while-launching');
       await closeWithin(launched, CLOSE_TIMEOUT_MS);
       await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       throw new Error('The VS Code session was closed while it was launching');
