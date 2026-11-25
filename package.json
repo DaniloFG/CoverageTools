@@ -189,6 +189,7 @@
     "test:perf": "vitest run --project perf",
     "test:ui": "node esbuild.mjs && node test/ui/run.mjs",
     "check:size": "node scripts/check-size.mjs",
+    "screenshots": "node scripts/screenshots.mjs",
     "package": "vsce package --no-yarn"
   },
   "dependencies": {

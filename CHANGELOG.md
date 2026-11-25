@@ -21,7 +21,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - Lightweight operation: no startup cost, no idle work, and report parsing
   off the main extension thread.
-- Usage screenshots in the README, captured from the sample workspace.
 
 ### In progress
 
@@ -58,3 +57,4 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Read-only behaviour in untrusted workspaces: no command runs, reports are
   still read.
 - Custom coverage command per project (`coverageTools.commands`).
+- Usage screenshots in the README, captured from the sample workspace.

@@ -1,4 +1,4 @@
-import { cp, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
@@ -12,6 +12,13 @@ export interface LaunchOptions {
   env?: Record<string, string>;
   /** False: Workspace Trust stays on and the workspace opens untrusted (Restricted Mode). Default true. */
   trusted?: boolean;
+  /** Extra command-line arguments for VS Code, e.g. `--force-device-scale-factor=2`. */
+  args?: readonly string[];
+  /**
+   * True: the extension is linked into the profile's extensions folder and loads as an installed
+   * extension, so the window is not an "Extension Development Host" (for screenshots). Default false.
+   */
+  installed?: boolean;
   /**
    * For the harness's own tests: awaited at a fixed point of the launch ('launched': the process is
    * up, before the window is awaited; 'window': the first window exists), so a test can act there.
@@ -417,6 +424,7 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
     const extensionsDir = join(tempRoot, 'extensions');
     await mkdir(join(userDataDir, 'User'), { recursive: true });
     await mkdir(extensionsDir, { recursive: true });
+    if (opts.installed) await linkExtension(resolve(opts.extensionPath), extensionsDir);
     await writeFile(
       join(userDataDir, 'User', 'settings.json'),
       JSON.stringify({ ...BASE_SETTINGS, ...(opts.trusted === false ? UNTRUSTED_SETTINGS : {}), ...opts.settings }, null, 2),
@@ -437,9 +445,10 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
         // Trace lines of the extension's output channel tell the harness which file events arrived.
         '--log=DaniloFG.coverage-tools:trace',
         '--window-size=1280,800',
-        `--extensionDevelopmentPath=${resolve(opts.extensionPath)}`,
+        ...(opts.installed ? [] : [`--extensionDevelopmentPath=${resolve(opts.extensionPath)}`]),
         `--user-data-dir=${userDataDir}`,
         `--extensions-dir=${extensionsDir}`,
+        ...(opts.args ?? []),
         resolve(opts.workspace),
       ],
     });
@@ -461,6 +470,12 @@ export async function launchVSCode(opts: LaunchOptions): Promise<VSCodeSession> 
     await close().catch(() => {});
     throw error;
   }
+}
+
+/** Links the extension at `extensionPath` into `extensionsDir` as `<publisher>.<name>-<version>`. */
+async function linkExtension(extensionPath: string, extensionsDir: string): Promise<void> {
+  const manifest = JSON.parse(await readFile(join(extensionPath, 'package.json'), 'utf8')) as { publisher: string; name: string; version: string };
+  await symlink(extensionPath, join(extensionsDir, `${manifest.publisher.toLowerCase()}.${manifest.name}-${manifest.version}`), 'dir');
 }
 
 /** Closes VS Code, killing it if it has not exited within `timeoutMs`. */

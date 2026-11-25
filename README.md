@@ -93,23 +93,42 @@ A test run only produces data if it writes one of these. A plain
 
 ## Usage
 
-Screenshots for each step will be added here once the extension runs; they
-will be real captures, taken from the sample workspace in this repository.
+The screenshots below are real captures of the extension running on the
+sample workspace in this repository (`samples/`: a Jest, a pytest and a .NET
+project). `npm run screenshots` takes them again.
 
 1. **Run everything.** Open the Command Palette and run
    `Coverage Tools: Run All Coverage`. Every test project in the workspace
    runs, one at a time, and the Test Coverage view fills in as each finishes.
+
+   ![The Command Palette with "Coverage Tools: Run All Coverage" highlighted, over the Explorer of the sample workspace](docs/images/01-run-all.png)
+
 2. **Read the result.** The Test Coverage view lists every covered file from
    every project, with its percentage and bar.
+
+   ![The Test Coverage view listing Calculator.cs, calc.js and calc.py from the .NET, Jest and pytest samples, with percentages and coverage bars](docs/images/02-coverage-view.png)
+
 3. **See it line by line.** Open any listed file to see covered and uncovered
-   lines in the editor.
+   lines in the editor. Run `Test: Toggle Inline Coverage` to highlight them
+   inside the code, with hit counts.
+
+   ![Calculator.cs open with inline coverage: covered lines in green with hit counts, the uncovered division-by-zero branch in red](docs/images/03-line-detail.png)
+
 4. **Run one target.** Right-click a test project, a folder, or a test file in
    the Explorer and choose `Run Coverage Here`.
+
+   ![The Explorer context menu of calc.test.js with "Run Coverage Here" highlighted](docs/images/04-explorer-menu.png)
+
 5. **Or just use your terminal.** Run your tests with coverage as you always
    do. The view updates when the report is written.
-6. **Bring it back.** If another extension's test run replaces the display,
-   click the Coverage Tools item in the status bar, or run
+
+   ![The integrated terminal after "yarn test --coverage" in the Jest sample, with the Test Coverage view showing calc.js at 100%](docs/images/05-terminal-detection.png)
+
+6. **Bring it back.** The status bar shows the accumulated total. If another
+   extension's test run replaces the display, click that item, or run
    `Coverage Tools: Show Coverage`.
+
+   ![The bottom of the VS Code window, with the Coverage Tools total of 88.4% in the status bar](docs/images/06-status-bar.png)
 
 ## Commands
 
@@ -229,7 +248,7 @@ built to these rules, and each release is checked against them:
 | Python support: pytest and unittest | Done (unreleased) |
 | Custom command per project | Done (unreleased) |
 | Status bar total | Done (unreleased) |
-| Usage screenshots in this README | Planned |
+| Usage screenshots in this README | Done (unreleased) |
 
 ## Installation
 
