@@ -121,3 +121,74 @@ Sampling method (documented in `test/perf/helpers.ts`):
 - Partial-run union over 5,000 files: longest block about 21 ms.
 - Discovery of 20,000 files / 30 projects: longest block about 13 ms.
 - Bundle 97 KB (extension + worker).
+
+## Budget rulings (controller round)
+
+**Commits:**
+- `8c05d12` perf: publish files without coverage data and read detail from the store
+- `c379369` perf: send parsed reports from the worker in chunks
+- `a8c0693` test: measure perf memory samples in isolation
+
+### 1. Republication memory: published files pin no data
+- `AccumulatedFileCoverage(uri, summary, path)` holds only the uri, the three `TestCoverageCount`s and the path.
+- `loadDetailedCoverage` looks the path up in the current `store.merged()`. It uses a path index that is dropped on every store change, so it never keeps superseded entries. It returns `[]` when the path has left the store.
+- A file whose counts are unchanged is republished as the same object. A changed file keeps its Uri.
+- Documented consequence: an old Coverage Tools run opened from the Test Results history shows the current line detail. The design doc (section 6, "Publicação pela API nativa") is updated.
+- Unit tests in `test/unit/vscode/publisher.test.ts`:
+  - The detail comes from the current store, even for a file published before the change.
+  - A path that left the store yields `[]`.
+  - A published object has no property, to a depth of 4, holding a typed array or ArrayBuffer.
+  - Reuse when counts are unchanged.
+  - Sliced publication.
+- RED (with HEAD's publisher, same test): 59.2 / 60.1 / 60.2 MB, failed. GREEN: **32.8 / 32.8 / 32.8 MB against the 50 MB limit: a margin of 17.2 MB (34%)**. The scenario is unchanged: 50 re-runs of a 100-file project, 64 runs retained.
+- Measurement fix in the test harness (`a8c0693`). In an earlier sample, the test or the async frame still held data, which blurred the later samples' figures. Now:
+  - each sample runs in its own function;
+  - each bundle loads through its own `createRequire`, so the parent's `children` no longer keeps old bundles, fakes and stores;
+  - `gc()` repeats until `external` holds still, because the array-buffer sweeper frees memory after the collection;
+  - the republication test holds no data of its own.
+
+### 2. Ingest block
+I measured the main-thread chunks of a 5,000-file ingest here:
+- structured-clone deserialization of the single worker message: 12–14 ms (best);
+- `merged()` + summaries: 9–11 ms;
+- the publish loop (5,000 `FileCoverage` + `addCoverage`): 25–46 ms (the dominant one);
+- `store.replace`: 1–6 ms.
+
+Cut:
+- The publish loop now adds coverage in slices of at most 8 ms, with yields in between. It is one run, ended once; a newer publication or a close supersedes a slice in progress. `settled` fires when it is done, and `publishNow()` returns a Promise that Show Coverage awaits.
+- The worker answers in `files` messages of at most 250 files, then `end`. The parse signature and semantics are unchanged. Unit tests cover order, two interleaved requests, an error mid-stream (one rejection, nothing pending, a fresh worker next), a crash mid-stream, and `toResponses` splitting. RED with HEAD's client: 10 failed.
+- I could not slice `store.merged()`: `store.ts` belonged to another agent. Its ~10 ms is what remains.
+
+Result, best-of-3 maximum, over three suite runs: **23.3 / 22.8 / 24.0 ms** (per-run min/median/max: 23.3/25.7/47.8, 22.8/22.8/37.5, 24.0/24.3/31.1). This meets "about 25 ms", but only just.
+
+### Updated budget table (last full run: `npm run test:perf`, 13/13 passed)
+
+| Budget | Limit | Measured (min / median / max, samples) | Test |
+|---|---|---|---|
+| Activation (require + activate) | < 20 ms median | 11.7 / 12.5 / 15.9 ms, 20 fresh processes (another run under load: 11.8 / 16.3 / 19.6). The activate call alone: 1.16 / 1.26 / 1.80 | activation › activate returns in under 20 ms |
+| Reads, watchers, timers, workers in activate | 0 | 0 | activation › activate performs no file reads… |
+| At rest (empty workspace; after ingest + publish) | 0 timers, 0 workers | 0 / 0 | activation › no timer… / nothing is left running… |
+| Ingest block end to end | < 50 ms (best of 3) | 24.0 / 24.3 / 31.1 ms | ingest › …(watcher → worker → store → publish) |
+| Parse → replace → merged | < 50 ms | 19.3 / 30.7 / 30.7 ms | ingest › …(parse → store.replace → merged → totals) |
+| Partial-run union + merged + totals | < 50 ms | 22.9 / 24.9 / 34.1 ms | ingest › a partial-run union… |
+| Memory, 5,000 files accumulated + published | < 50 MB | 31.8 / 31.8 / 31.8 MB | ingest › 5,000 accumulated files… |
+| Memory, + 50 republications, same data | < 50 MB | 32.2 / 32.3 / 32.3 MB | ingest › 50 republications… (unchanged data) |
+| Memory, + 50 republications, each a 100-file re-run | < 50 MB | 32.8 / 32.8 / 32.8 MB | ingest › 50 republications… each re-running… |
+| Watcher hot path, 50,000 events | < 100 ms total, median of 5 | 28.4 / 30.5 / 46.5 ms | watch › 50,000 irrelevant file events… |
+| Relevant burst | ≤ 1 stat per new path, ≤ 1 rediscovery | 200 stats / 200 paths, 0 rediscoveries | watch › a relevant burst… |
+| Discovery, 20,000 files / 30 projects | < 50 ms | 12.4 / 13.3 / 16.3 ms | discovery.perf › … |
+| Bundle | < 200 KB | 99,669 bytes | `npm run check:size` |
+
+Tight (within 30% of the limit): none by the asserted figure. The activation median reached 16.3 ms (82%) in one run while the machine was loaded, against 12–13 ms otherwise.
+
+### Verification
+- `npm run lint`: clean.
+- `npm test`: 664 passed.
+- `npm run test:perf`: 13/13, twice.
+- `xvfb-run -a npm run test:ui`: 27/27.
+- `npm run check:size`: 99,669 bytes.
+
+### For the README/CHANGELOG
+- 5,000-file report: longest main-thread block about 24 ms; 32 MB of memory, which stays at about 33 MB after 50 republications.
+- Activation about 12 ms.
+- 50,000 file events: about 25–30 ms in total.
