@@ -312,7 +312,7 @@ export async function discover(
     }
 
     for (const p of [...custom, ...applyNesting(found, settings.nestedProjects)].sort(byDir)) {
-        const key = CASE_INSENSITIVE ? p.key.toLowerCase() : p.key;
+      const key = CASE_INSENSITIVE ? p.key.toLowerCase() : p.key;
       if (seen.has(key)) continue;
       seen.add(key);
       projects.push({ ...p, meta: { ...p.meta, workspaceFolder: folder } });
