@@ -2,7 +2,7 @@
   "name": "coverage-tools",
   "displayName": "Coverage Tools",
   "description": "Run tests with coverage and show the results in VS Code's native coverage view.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "DaniloFG",
   "license": "MIT",
   "icon": "media/icon.png",
