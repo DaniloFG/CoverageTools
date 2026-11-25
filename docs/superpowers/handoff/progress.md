@@ -223,3 +223,9 @@ Environment: VS Code download allowed (env "coveragetools"); dotnet-sdk-8.0 + el
 - exec.test.ts cwd test: /var vs /private/var symlink (test must realpath) — test-only.
 - publishWorkflow.test.ts: PyYAML missing on macOS (yaml npm replacement pending in T22).
 - Windows result not yet seen; forward when it arrives.
+
+## Handoff point (2026-11-25) — all implementers finished
+- T20 follow-up DONE: 8c05d12, c379369, a8c0693. perf 13/13; republication memory 32.8 MB; ingest max block ~24 ms; remaining cost is store.merged() (~10 ms) — candidate for final review. History runs now show current line detail (design updated).
+- T22 DONE_WITH_CONCERNS: f68b2c5, 40835f1, 6cb03d0, 3bfc4a3, 8037d34, 1a45024, f10f76c, d22e90a, 5abbe61. Local: lint clean, unit 664, e2e 38, perf 13, ui 27, package OK. Concerns: cold activation reading 22 ms once (median ~15.5); CI on final head unconfirmed; .vsix 1.8 MB / 1006 files (997 from c8 dependency tree, unpruned — consider bundling/pruning c8 for lightness).
+- NOT REVIEWED YET: T19 fix round (dd14038, 59d5079, 29eaafe), T20 (4684258, 0f62e74, 8c05d12, c379369, a8c0693), T22 (all commits above). Then final whole-branch review.
+- PR activity subscription was dropped in the old session; subscribe again.

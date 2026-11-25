@@ -38,3 +38,7 @@ apt: dotnet-sdk-8.0, python3-venv, xvfb and Electron libs; `npm ci`;
 `node scripts/setup-samples.mjs`. VS Code download hosts must be allowed
 (update.code.visualstudio.com, vscode.download.prss.microsoft.com) — personal
 environment "coveragetools" has them. Running as root: Electron needs `--no-sandbox`.
+
+## STATUS at handoff
+All implementers have finished and committed; the tree is clean. See the last section
+of `progress.md` ("Handoff point") for the commits awaiting review and the open concerns.
