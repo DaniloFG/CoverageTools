@@ -1,4 +1,4 @@
-import { unionFileLists, unionFiles } from './merge';
+import { unionFileLists, unionFileListsInSlices, unionFiles, type SliceOptions } from './merge';
 import { summarize, type Count, type FileCoverageData, type FileSummary } from './model';
 
 export interface MergedEntry { path: string; parts: readonly FileCoverageData[]; summary: FileSummary }
@@ -28,6 +28,23 @@ export class CoverageStore {
     if (current !== undefined && files.length === 0) return;
     this.projects.set(key, unionFileLists(current ?? [], files));
     this.changed();
+  }
+
+  /**
+   * `union` for large runs: the files are unioned in slices that give the event loop control back
+   * in between, then the project changes once. If the project changed meanwhile, the union starts
+   * again from what it holds then.
+   */
+  async unionInSlices(key: string, files: readonly FileCoverageData[], options?: SliceOptions): Promise<void> {
+    for (;;) {
+      const current = this.projects.get(key);
+      if (current !== undefined && files.length === 0) return;
+      const next = await unionFileListsInSlices(current ?? [], files, options);
+      if (this.projects.get(key) !== current) continue;
+      this.projects.set(key, next);
+      this.changed();
+      return;
+    }
   }
 
   /** Removes one project, or all of them when `key` is omitted. */

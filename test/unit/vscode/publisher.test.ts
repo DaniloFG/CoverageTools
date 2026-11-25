@@ -43,3 +43,28 @@ test('the run profile starts nothing when VS Code invokes it (native "Run with C
   publisher.dispose();
 });
 
+test('a republication reuses the published file of every file whose coverage did not change', () => {
+  const f = (p: string, hits: number) => {
+    const b = new FileBuilder(p);
+    b.addLine(1, hits);
+    return b.build();
+  };
+  const store = new CoverageStore();
+  store.replace('a', [f('/w/a1.js', 1), f('/w/a2.js', 0)]);
+  store.replace('b', [f('/w/b1.js', 1)]);
+  const publisher = new Publisher(store);
+  h.added.length = 0;
+  publisher.publishNow();
+  store.replace('b', [f('/w/b1.js', 5)]);
+  publisher.publishNow();
+  const [first, second] = h.added as Array<Array<{ uri: { fsPath: string } }>>;
+  expect(second.map(c => c.uri.fsPath)).toEqual(['/w/a1.js', '/w/a2.js', '/w/b1.js']);
+  expect(second[0]).toBe(first[0]);
+  expect(second[1]).toBe(first[1]);
+  expect(second[2]).not.toBe(first[2]);
+  // Once closed, nothing published before is kept.
+  void publisher.close();
+  publisher.publishNow();
+  expect(h.added[2][0]).not.toBe(first[0]);
+  publisher.dispose();
+});

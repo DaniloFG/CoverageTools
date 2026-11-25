@@ -22,6 +22,13 @@ class AccumulatedFileCoverage extends vscode.FileCoverage {
   }
 }
 
+/** Whether two part lists hold the same objects (the store's per-file data is immutable). */
+function sameParts(a: readonly FileCoverageData[], b: readonly FileCoverageData[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 function count(c: { covered: number; total: number }): vscode.TestCoverageCount {
   return new vscode.TestCoverageCount(c.covered, c.total);
 }
@@ -56,6 +63,12 @@ export class Publisher {
   /** Whether a run of ours may be on screen (published since the last close). */
   private shown = false;
   private readonly settleListeners = new Set<() => void>();
+  /**
+   * The files of the last publication by path. A file whose parts are the same objects again is
+   * published as the same `FileCoverage`: VS Code keeps the files of every run in its history, so a
+   * republication after one project changed costs that project's files only.
+   */
+  private published = new Map<string, AccumulatedFileCoverage>();
 
   constructor(private readonly store: CoverageStore) {
     this.controller = vscode.tests.createTestController('coverageTools', 'Coverage Tools');
@@ -86,13 +99,20 @@ export class Publisher {
   publishNow(): void {
     this.cancelPending();
     const entries = this.store.merged();
+    const published = new Map<string, AccumulatedFileCoverage>();
     if (entries.length > 0) {
       const request = new vscode.TestRunRequest(undefined, undefined, this.profile);
       const run = this.controller.createTestRun(request, 'Coverage Tools', false);
-      for (const e of entries) run.addCoverage(new AccumulatedFileCoverage(vscode.Uri.file(e.path), e.summary, e.parts));
+      for (const e of entries) {
+        const before = this.published.get(e.path);
+        const file = before !== undefined && sameParts(before.parts, e.parts) ? before : new AccumulatedFileCoverage(before?.uri ?? vscode.Uri.file(e.path), e.summary, e.parts);
+        published.set(e.path, file);
+        run.addCoverage(file);
+      }
       run.end();
       this.shown = true;
     }
+    this.published = published;
     this.settled();
   }
 
@@ -100,6 +120,7 @@ export class Publisher {
   async close(): Promise<void> {
     this.cancelPending();
     this.shown = false;
+    this.published = new Map();
     this.settled();
     try {
       await vscode.commands.executeCommand('testing.coverage.close');
@@ -110,6 +131,7 @@ export class Publisher {
 
   dispose(): void {
     this.cancelPending();
+    this.published = new Map();
     this.subscription.dispose();
     this.settleListeners.clear();
     this.controller.dispose();

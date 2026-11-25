@@ -110,7 +110,8 @@ export async function runProject(project: Project, target: RunTarget, deps: RunD
     if (parsed === undefined) return { status: 'bad-report', message: errors.join('\n') };
 
     if (target.kind === 'full') deps.store.replace(project.key, parsed.files);
-    else deps.store.union(project.key, parsed.files);
+    // A partial run of a large project unions thousands of files: in slices, never in one main-thread block.
+    else await deps.store.unionInSlices(project.key, parsed.files);
 
     if (failedCode !== undefined) {
       return { status: 'tests-failed', message: failedCode === null ? 'A step was terminated' : `A step exited with code ${failedCode}` };

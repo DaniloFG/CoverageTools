@@ -116,3 +116,37 @@ test('totalsOf gives the statement totals of one project, or undefined for an un
   s.union('p2', [file('/w/c.ts', [[1, 0]])]);
   expect(s.totalsOf('p2')).toEqual({ covered: 1, total: 2 });
 });
+
+test('unionInSlices gives what union gives, yields between slices, and changes the store once', async () => {
+  const many = (n: number, hits: number) => Array.from({ length: n }, (_, i) => file(`/w/f${String(i).padStart(4, '0')}.ts`, [[1, hits], [2, 0]]));
+  const sync = new CoverageStore();
+  sync.replace('p', many(600, 1));
+  sync.union('p', many(600, 2));
+
+  const store = new CoverageStore();
+  store.replace('p', many(600, 1));
+  let changes = 0;
+  store.onDidChange(() => changes++);
+  let yields = 0;
+  const done = store.unionInSlices('p', many(600, 2), { sliceMs: 0, yieldToLoop: async () => { yields++; } });
+  expect(changes).toBe(0);
+  await done;
+  expect(changes).toBe(1);
+  expect(yields).toBeGreaterThan(1);
+  expect(store.merged().map(e => [e.path, lines(e.parts[0])])).toEqual(sync.merged().map(e => [e.path, lines(e.parts[0])]));
+});
+
+test('unionInSlices starts again from what the project holds when it changed meanwhile', async () => {
+  const store = new CoverageStore();
+  const others = Array.from({ length: 31 }, (_, i) => file(`/w/z${i}.ts`, [[1, 1]]));
+  store.replace('p', [file('/w/a.ts', [[1, 1]])]);
+  let first = true;
+  await store.unionInSlices('p', [file('/w/a.ts', [[1, 2]]), ...others], {
+    sliceMs: 0,
+    yieldToLoop: async () => {
+      if (first) store.replace('p', [file('/w/a.ts', [[1, 10]])]);
+      first = false;
+    },
+  });
+  expect(lines(store.merged()[0].parts[0])).toEqual([[1, 12]]);
+});

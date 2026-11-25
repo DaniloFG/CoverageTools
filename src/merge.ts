@@ -128,3 +128,38 @@ export function unionFileLists(a: readonly FileCoverageData[], b: readonly FileC
   }
   return [...byPath.values()];
 }
+
+export interface SliceOptions {
+  /** Main-thread time a slice may take before the event loop gets control back. */
+  sliceMs: number;
+  /** Gives the event loop control back (a macrotask, e.g. `setImmediate`). */
+  yieldToLoop(): Promise<void>;
+}
+
+export const DEFAULT_SLICES: SliceOptions = {
+  sliceMs: 8,
+  yieldToLoop: () => new Promise(resolve => setImmediate(resolve)),
+};
+
+/**
+ * `unionFileLists` in slices of at most `sliceMs` each, giving the event loop control back in between:
+ * unioning thousands of files takes longer than a main-thread block may last. Same result, same order.
+ */
+export async function unionFileListsInSlices(
+  a: readonly FileCoverageData[], b: readonly FileCoverageData[], options: SliceOptions = DEFAULT_SLICES,
+): Promise<FileCoverageData[]> {
+  const byPath = new Map<string, FileCoverageData>();
+  let sliceStart = performance.now();
+  for (const list of [a, b]) {
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      const existing = byPath.get(f.path);
+      byPath.set(f.path, existing ? unionTwo(existing, f) : f);
+      if ((i & 15) === 15 && performance.now() - sliceStart >= options.sliceMs) {
+        await options.yieldToLoop();
+        sliceStart = performance.now();
+      }
+    }
+  }
+  return [...byPath.values()];
+}
