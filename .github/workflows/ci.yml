@@ -53,6 +53,20 @@ jobs:
           name: ui-test-results
           path: test-results/
 
+  # The lightness budgets (design 6.1) on the built bundle. The limits are the same as everywhere;
+  # the tests sample robustly (medians, best of 3 for main-thread blocks) because runners are noisy.
+  perf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:perf
+
   e2e:
     runs-on: ubuntu-latest
     steps:

@@ -5,7 +5,20 @@ export default defineConfig({
     projects: [
       { test: { name: 'unit', include: ['test/unit/**/*.test.ts'] } },
       { test: { name: 'e2e', include: ['test/e2e/**/*.test.ts'], testTimeout: 300_000 } },
-      { test: { name: 'perf', include: ['test/perf/**/*.test.ts'] } },
+      {
+        test: {
+          name: 'perf',
+          include: ['test/perf/**/*.test.ts'],
+          // One fork, one file at a time: timings are not shared with other test files, and
+          // --expose-gc lets the memory tests collect garbage before measuring.
+          pool: 'forks',
+          execArgv: ['--expose-gc'],
+          fileParallelism: false,
+          maxWorkers: 1,
+          testTimeout: 120_000,
+          hookTimeout: 120_000,
+        },
+      },
       {
         test: {
           name: 'ui',
