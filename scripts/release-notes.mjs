@@ -1,6 +1,8 @@
 // Writes the body of the GitHub release from CHANGELOG.md.
 //
-//   node scripts/release-notes.mjs <version> <output file> <neutral|strict|auto>
+//   node scripts/release-notes.mjs <version> <output file> <neutral|strict|auto> [changelog file]
+//
+// The changelog read is the repository's CHANGELOG.md unless another file is given.
 //
 // The body is the `## [<version>]` section when the changelog has one; otherwise (the automatic patch the
 // workflow publishes on a merge has no section of its own) it is the `### Done` list under `## [Unreleased]`.
@@ -85,14 +87,14 @@ export function isPatch(version) {
   return /^\d+\.\d+\.(\d+)$/.test(version) && Number(version.split('.')[2]) !== 0;
 }
 
-/** CI entry point: reads the root CHANGELOG.md and writes the release body to the output file. */
+/** CI entry point: reads the changelog (the root CHANGELOG.md by default) and writes the release body to the output file. */
 function main() {
-  const [version, outputFile, mode] = process.argv.slice(2);
+  const [version, outputFile, mode, changelogFile] = process.argv.slice(2);
   if (!version || !outputFile || (mode !== 'neutral' && mode !== 'strict' && mode !== 'auto')) {
-    throw new Error('Usage: node scripts/release-notes.mjs <version> <output file> <neutral|strict|auto>');
+    throw new Error('Usage: node scripts/release-notes.mjs <version> <output file> <neutral|strict|auto> [changelog file]');
   }
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  const changelog = readFileSync(changelogFile ?? join(root, 'CHANGELOG.md'), 'utf8');
   writeFileSync(outputFile, `${releaseNotes(changelog, version, mode === 'neutral' || (mode === 'auto' && isPatch(version)))}\n`);
 }
 

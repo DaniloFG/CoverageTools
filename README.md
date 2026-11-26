@@ -39,8 +39,14 @@ TEST COVERAGE
 - **Picks up coverage runs automatically.** Run your tests with coverage from
   the terminal, a task, or a script, and the result is loaded as soon as the
   report is written.
-- **Runs everything in one go.** One command runs coverage for every test
-  project in the workspace.
+- **Runs the projects you choose.** `Run Coverage...` lists the test projects
+  of the workspace and runs the ones you tick. In a workspace with dozens of
+  projects you run the three you are working on, not all fifty.
+- **Runs everything in one go, when you want that.** `Run All Coverage` runs
+  every test project in the workspace.
+- **Goes easy on your machine.** Projects run one at a time by default.
+  Parallel runs are opt-in, and sized to the processor cores and free memory
+  the computer actually has. See [Sequential or parallel](#sequential-or-parallel).
 - **Runs just what you point at.** Right-click a test project, a folder, or a
   test file in the Explorer to run coverage for that target only. The menu
   item appears only where there are tests to run.
@@ -95,9 +101,29 @@ The screenshots below are real captures of the extension running on the
 sample workspace in this repository (`samples/`: a Jest, a pytest and a .NET
 project). `npm run screenshots` takes them again.
 
-1. **Run everything.** Open the Command Palette and run
-   `Coverage Tools: Run All Coverage`. Every test project in the workspace
-   runs, one at a time, and the Test Coverage view fills in as each finishes.
+1. **Choose what to run.** Click the Coverage Tools button in the title of
+   the Testing view, or run `Coverage Tools: Run Coverage...` from the Command
+   Palette. Tick the test projects you want and press Enter. Nothing is ticked
+   the first time; after that, the projects you ran last time come ticked.
+   Type to filter the list by name, path or test stack. A workspace with a
+   single test project has nothing to choose from: it just runs.
+
+   ```
+   Run Coverage: one project at a time (lighter on CPU and memory)   [▶▶] [⇄]
+   Tick the test projects to run coverage for
+     ── api ────────────────────────────────────────────
+     ☑ Orders.Tests     Orders.Tests/Orders.Tests.csproj · .NET
+     ☐ Billing.Tests    Billing.Tests/Billing.Tests.csproj · .NET
+     ── web ────────────────────────────────────────────
+     ☐ cart             packages/cart/package.json · Vitest
+   ```
+
+   The two buttons in the title run every project (`▶▶`) and switch between
+   sequential and parallel runs (`⇄`).
+
+   **Or run everything.** `Coverage Tools: Run All Coverage` (Command Palette,
+   or the `...` menu of the Testing view) runs every test project in the
+   workspace without asking. The Test Coverage view fills in as each finishes.
 
    ![The Command Palette with "Coverage Tools: Run All Coverage" highlighted, over the Explorer of the sample workspace](docs/images/01-run-all.png)
 
@@ -132,7 +158,8 @@ project). `npm run screenshots` takes them again.
 
 | Command | Where | What it does |
 |---------|-------|--------------|
-| `Coverage Tools: Run All Coverage` | Command Palette, Testing view title | Runs coverage for every discovered test project, one at a time |
+| `Coverage Tools: Run Coverage...` | Command Palette, Testing view title button | Lists the discovered test projects and runs coverage for the ones you tick |
+| `Coverage Tools: Run All Coverage` | Command Palette, Testing view `...` menu | Runs coverage for every discovered test project |
 | `Coverage Tools: Run Coverage Here` | Explorer right-click menu | Runs coverage for the selected project, folder, or test file |
 | `Coverage Tools: Show Coverage` | Command Palette, status bar | Brings the accumulated coverage back on screen |
 | `Coverage Tools: Clear Coverage` | Command Palette | Empties the accumulated coverage and closes the native view |
@@ -142,6 +169,38 @@ progress. The total is computed exactly as the Test Coverage view computes the
 percentage of a row (statements, branches and functions together, or what
 `testing.displayedCoveragePercent` selects), with the same two decimals. Its
 tooltip lists the total of each project.
+
+## Sequential or parallel
+
+By default test projects run **in sequence**, one at a time. A test run is
+heavy: it builds, starts test hosts or workers and often uses every core by
+itself. Running one at a time keeps the editor responsive and is the right
+choice on a computer with few processor cores or little memory.
+
+You can choose **parallel** runs instead, with the switch button of the
+`Run Coverage...` list or the `coverageTools.run.mode` setting. Parallel is
+faster, and every extra run takes its own share of processor and memory, so the
+extension sizes it to the machine rather than starting everything at once:
+
+- **By processor.** At most half the cores run at a time, and never more than
+  4 (or the number you set in `coverageTools.run.maxParallel`). The other half
+  stays free for the editor and for the cores each test run uses on its own.
+- **By memory.** There are never more runs than the free memory holds, at
+  1.5 GB per run, measured before the runs start. While less than 1 GB is
+  free, no further run starts next to the ones running.
+- **On a small machine it is sequential anyway.** With one or two cores, or
+  without memory to spare, parallel mode runs one project at a time and says
+  so in the `Coverage Tools` output.
+- **.NET projects run one after another** in either mode. Each run builds the
+  projects it references, and two builds of the same referenced project at
+  once fail on locked files. In parallel mode they still overlap with Node and
+  Python projects.
+- Two runs in the same project directory never overlap.
+- In the `Coverage Tools` output, each line a parallel run prints starts with
+  `[project name]`, so interleaved runs can be told apart.
+
+Cancelling the progress notification stops every run under way and empties the
+queue, in both modes.
 
 ## How accumulation works
 
@@ -177,8 +236,9 @@ against them:
   re-runs.
 - **Detail on demand.** Only per-file totals are published. Line-by-line
   detail is loaded when you open a file.
-- **One run at a time.** Test runs are separate processes, queued so your
-  machine stays usable.
+- **One run at a time, unless you ask.** Test runs are separate processes,
+  queued so your machine stays usable. Parallel runs are opt-in and limited to
+  the cores and free memory of the machine.
 - **Small.** The bundled code is about 100 KB.
 - **No telemetry and no network access.**
 
@@ -186,6 +246,8 @@ against them:
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
+| `coverageTools.run.mode` | `sequential` | Run test projects in sequence (`sequential`) or several at the same time (`parallel`). Sequence is the default so that coverage runs do not take over the machine's processor and memory |
+| `coverageTools.run.maxParallel` | `0` (automatic) | In parallel mode, the most test projects that run at the same time. `0` chooses it from the machine: half its processor cores, at most 4. Whatever the value, free memory still limits it (1.5 GB per run) |
 | `coverageTools.watch.enabled` | `true` | Detect coverage reports written by runs made outside the extension (terminal, tasks, scripts) |
 | `coverageTools.watch.globs` | the seven report patterns listed above | Glob patterns, relative to each workspace folder, of the coverage reports to detect |
 | `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/.tox/**`, `**/.nox/**`, `**/.conda/**`, `**/site-packages/**`, `**/build/lib/**`, `**/__pycache__/**` | Paths ignored during discovery and watching |
@@ -236,6 +298,16 @@ against them:
 - **`Run Tests with Coverage` is VS Code's, not ours.** Those entries belong
   to VS Code's test explorer and do not start Coverage Tools; use
   `Run Coverage Here`.
+
+**Running**
+
+- **.NET projects are never run in parallel with each other**, because their
+  builds share the projects they reference. Parallel mode speeds up workspaces
+  that mix stacks, or that have several Node or Python projects.
+- **The parallel limits are estimates.** The extension cannot know how much a
+  test run will need: it assumes 1.5 GB of memory per run. On macOS free
+  memory cannot be read reliably, so half of the installed memory is assumed
+  free and runs are not held back while they are under way.
 
 **Node**
 
@@ -290,7 +362,9 @@ against them:
 | Status bar total, matching the native percentage |
 | Show Coverage and Clear Coverage |
 | Automatic detection of coverage reports (Cobertura, Istanbul JSON, LCOV, coverage.py data) |
+| Run Coverage... (choose the projects to run) |
 | Run All Coverage |
+| Sequential runs by default; parallel runs sized to the machine |
 | Run Coverage Here (Explorer right-click) |
 | .NET support: VSTest |
 | .NET support: Microsoft.Testing.Platform |

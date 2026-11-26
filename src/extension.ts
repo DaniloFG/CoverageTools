@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import { customAdapter } from './adapters/custom';
@@ -5,12 +6,13 @@ import { ADAPTERS } from './adapters/index';
 import { createPythonAdapter } from './adapters/python';
 import type { Adapter, AdapterId, Project, RunTarget } from './adapters/types';
 import { loggedRun } from './runner/batch';
+import { ParallelGovernor, readMachine } from './runner/capacity';
 import { RunQueue } from './runner/queue';
 import { runProject, type RunOutcome } from './runner/runProject';
 import { RunSuppressions } from './runner/suppression';
 import { CoverageStore } from './store';
 import { registerCommands } from './vscode/commands';
-import { readSettings } from './vscode/config';
+import { readRunSettings, readSettings, writeRunMode } from './vscode/config';
 import { WorkspaceFileEvents } from './vscode/fileEvents';
 import { vscodeFsReader } from './vscode/fsReader';
 import { ProjectDiscovery } from './vscode/projects';
@@ -29,13 +31,17 @@ export interface ExtensionApi {
   watching: Promise<void>;
 }
 
+/** Workspace state: the keys of the projects last run from the picker. */
+const PICKED_PROJECTS = 'coverageTools.pickedProjects';
+
 const timers = { set: (fn: () => void, ms: number) => setTimeout(fn, ms), clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
 
 export function activate(context: vscode.ExtensionContext): ExtensionApi {
   // Listener errors are logged; `log` is defined below and only called later, so the output channel is not created here.
   const store = new CoverageStore(m => log(m));
   const publisher = new Publisher(store);
-  const queue = new RunQueue();
+  // One run at a time unless the user chose parallel runs; then as many as the machine has room for.
+  const queue = new RunQueue(new ParallelGovernor({ settings: readRunSettings, machine: () => readMachine(os), log: m => log(m) }));
   const statusBar = new StatusBar(store, publisher, queue);
   // The worker starts only when the first report arrives.
   const parser = new ParserClient(join(context.extensionPath, 'dist', 'worker.js'));
@@ -100,7 +106,7 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       c8Bin,
       output,
       suppress: key => suppressions.suppress(key),
-    }, signal));
+    }, signal), readRunSettings().mode === 'parallel');
   };
 
   context.subscriptions.push(
@@ -118,7 +124,14 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi {
       store.clear();
       await publisher.close();
     }),
-    registerCommands({ discovery, queue, runProject: run, log, showOutput: () => output().show(true), isTrusted }),
+    registerCommands({
+      discovery, queue, runProject: run, log, showOutput: () => output().show(true), isTrusted,
+      picked: {
+        get: () => context.workspaceState.get<string[]>(PICKED_PROJECTS, []),
+        set: keys => context.workspaceState.update(PICKED_PROJECTS, [...keys]),
+      },
+      runMode: { get: () => readRunSettings().mode, set: writeRunMode },
+    }),
   );
 
   // Nothing is read during activation: discovery starts once activate has returned.

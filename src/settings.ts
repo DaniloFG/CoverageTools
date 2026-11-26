@@ -12,6 +12,24 @@ export interface Settings {
   commands: Record<string, string>;
 }
 
+/** How the test runs of the whole window are scheduled. */
+export interface RunSettings {
+  mode: 'sequential' | 'parallel';
+  /** The most runs at a time in parallel mode; 0 chooses from the machine's cores. */
+  maxParallel: number;
+}
+
+export const DEFAULT_RUN_SETTINGS: Readonly<RunSettings> = Object.freeze({ mode: 'sequential', maxParallel: 0 });
+
+/** The run settings from raw configuration values, with the defaults for anything unset or invalid. */
+export function runSettingsFrom(mode: unknown, maxParallel: unknown): RunSettings {
+  const valid = typeof maxParallel === 'number' && Number.isFinite(maxParallel) && maxParallel >= 1;
+  return {
+    mode: mode === 'sequential' || mode === 'parallel' ? mode : DEFAULT_RUN_SETTINGS.mode,
+    maxParallel: valid ? Math.floor(maxParallel) : DEFAULT_RUN_SETTINGS.maxParallel,
+  };
+}
+
 function deepFreeze<T extends object>(value: T): Readonly<T> {
   for (const v of Object.values(value)) if (typeof v === 'object' && v !== null) deepFreeze(v);
   return Object.freeze(value);
