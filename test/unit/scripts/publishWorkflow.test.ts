@@ -14,6 +14,7 @@ interface Step {
   uses?: string;
   run?: string;
   if?: string;
+  'continue-on-error'?: boolean;
   env?: Record<string, string>;
   with?: Record<string, unknown>;
 }
@@ -128,14 +129,19 @@ test('event inputs and secrets reach the shell only through env:', () => {
   expect(stepNamed('Open VSX').env).toMatchObject({ OVSX_PAT: '${{ secrets.OVSX_PAT }}' });
 });
 
-test('release notes come from the changelog, neutral only for a branch push', () => {
+test('release notes come from the changelog; a patch may be neutral, a minor or major may not (auto mode)', () => {
   const notes = stepNamed('release notes');
-  expect(notes.env?.ALLOW_NEUTRAL).toBe(
-    "${{ github.event_name == 'push' && github.ref_type == 'branch' && 'true' || 'false' }}",
-  );
-  expect(notes.run).toContain('node scripts/release-notes.mjs "$VERSION" "$RUNNER_TEMP/release-notes.md" "$MODE"');
-  expect(notes.run).toMatch(/MODE=neutral/);
-  expect(notes.run).toMatch(/MODE=strict/);
+  expect(notes.env).toEqual({ VERSION: '${{ steps.version.outputs.version }}' });
+  expect(notes.run).toContain('node scripts/release-notes.mjs "$VERSION" "$RUNNER_TEMP/release-notes.md" auto');
+});
+
+test('an Open VSX failure only warns and never stops the release', () => {
+  const ovsx = stepNamed('Open VSX');
+  expect(ovsx['continue-on-error']).toBe(true);
+  expect(ovsx.run).toContain('::warning::');
+  expect(ovsx.run).not.toMatch(/exit "\$CODE"/);
+  const release = steps.find((s) => s.uses === 'softprops/action-gh-release@v2');
+  expect(release?.if).not.toMatch(/ovsx|open/i);
 });
 
 test('the Marketplace and Open VSX steps publish release/coverage-tools-<version>.vsix', () => {

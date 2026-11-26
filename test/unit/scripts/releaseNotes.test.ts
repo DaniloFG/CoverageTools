@@ -1,5 +1,9 @@
 import { expect, test } from 'vitest';
-import { releaseNotes } from '../../../scripts/release-notes.mjs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { isPatch, releaseNotes } from '../../../scripts/release-notes.mjs';
 
 const HEADER = '# Changelog\n\nIntro text.\n\n';
 
@@ -53,4 +57,31 @@ test('an empty section of the version is an error even in neutral mode', () => {
 
 test('an invalid version throws', () => {
   expect(() => releaseNotes(HEADER + released, 'abc', true)).toThrow(/x\.y\.z/);
+});
+
+test('isPatch: only a last number other than 0 is a patch', () => {
+  expect(isPatch('0.1.1')).toBe(true);
+  expect(isPatch('2.3.10')).toBe(true);
+  expect(isPatch('0.2.0')).toBe(false);
+  expect(isPatch('1.0.0')).toBe(false);
+  expect(isPatch('abc')).toBe(false);
+});
+
+// The CLI reads the repository's CHANGELOG.md: 0.1.0 has a section, 9.9.0 and 9.9.1 have none.
+function cli(version: string, mode: string) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'release-notes-'));
+  const out = path.join(dir, 'notes.md');
+  const result = spawnSync('node', [path.resolve(__dirname, '../../../scripts/release-notes.mjs'), version, out, mode], { encoding: 'utf8' });
+  const body = result.status === 0 ? readFileSync(out, 'utf8') : '';
+  rmSync(dir, { recursive: true, force: true });
+  return { status: result.status, body, stderr: result.stderr };
+}
+
+test('auto mode: a patch without a section gets a note, a minor/major without one fails', () => {
+  expect(cli('9.9.1', 'auto')).toMatchObject({ status: 0 });
+  expect(cli('9.9.1', 'auto').body).toMatch(/\S/);
+  expect(cli('9.9.0', 'auto').status).toBe(1);
+  expect(cli('9.0.0', 'auto').stderr).toMatch(/nothing to say/i);
+  expect(cli('0.1.0', 'auto').status).toBe(0);
+  expect(cli('9.9.1', 'bogus').status).toBe(1);
 });

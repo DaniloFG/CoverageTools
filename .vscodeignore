@@ -6,7 +6,20 @@
 # repository (--baseImagesUrl), so docs/ stays out.
 **
 !dist/*.js
-!node_modules/**
+# vsce keeps a file when ANY negation matches, so node_modules is whitelisted by kind instead of whole:
+# runtime code and data (js, cjs, mjs, json, css, png), license files, and the two extensionless executables.
+# Source maps, markdown docs, .d.ts/.ts sources and other text files stay out (the .vsix is ~5 MB smaller).
+!node_modules/**/*.js
+!node_modules/**/*.cjs
+!node_modules/**/*.mjs
+!node_modules/**/*.json
+!node_modules/**/*.css
+!node_modules/**/*.png
+!node_modules/**/LICENSE*
+!node_modules/**/LICENCE*
+!node_modules/**/license*
+!node_modules/yargs/yargs
+!node_modules/which/bin/*
 !media/icon.png
 !README.md
 !CHANGELOG.md

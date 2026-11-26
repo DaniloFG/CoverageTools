@@ -1,11 +1,12 @@
 // Writes the body of the GitHub release from CHANGELOG.md.
 //
-//   node scripts/release-notes.mjs <version> <output file> <neutral|strict>
+//   node scripts/release-notes.mjs <version> <output file> <neutral|strict|auto>
 //
 // The body is the `## [<version>]` section when the changelog has one; otherwise (the automatic patch the
 // workflow publishes on a merge has no section of its own) it is the `### Done` list under `## [Unreleased]`.
-// With nothing to say, `neutral` (used only for a branch push) writes a fixed maintenance note and `strict`
-// fails, so a tag or a manual run never ships a release without text.
+// With nothing to say, `neutral` writes a fixed maintenance note and `strict` fails. `auto` (what the workflow
+// uses) is `strict` for a minor or major version (patch number 0) and `neutral` for a patch, so a minor or major
+// never ships without text while the automatic patches (and their tag/manual recovery) always can.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -79,15 +80,20 @@ export function releaseNotes(changelog, version, allowNeutral) {
   );
 }
 
+/** Whether the version is a patch release (its last number is not 0), which may use the neutral note. */
+export function isPatch(version) {
+  return /^\d+\.\d+\.(\d+)$/.test(version) && Number(version.split('.')[2]) !== 0;
+}
+
 /** CI entry point: reads the root CHANGELOG.md and writes the release body to the output file. */
 function main() {
   const [version, outputFile, mode] = process.argv.slice(2);
-  if (!version || !outputFile || (mode !== 'neutral' && mode !== 'strict')) {
-    throw new Error('Usage: node scripts/release-notes.mjs <version> <output file> <neutral|strict>');
+  if (!version || !outputFile || (mode !== 'neutral' && mode !== 'strict' && mode !== 'auto')) {
+    throw new Error('Usage: node scripts/release-notes.mjs <version> <output file> <neutral|strict|auto>');
   }
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
   const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
-  writeFileSync(outputFile, `${releaseNotes(changelog, version, mode === 'neutral')}\n`);
+  writeFileSync(outputFile, `${releaseNotes(changelog, version, mode === 'neutral' || (mode === 'auto' && isPatch(version)))}\n`);
 }
 
 // Runs only when executed directly, not when imported.

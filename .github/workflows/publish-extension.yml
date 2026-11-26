@@ -5,7 +5,7 @@ name: Publish VS Code extension
 #  - on every merge to main that touches what goes into the extension. The version is the one in package.json
 #    when it is above the last v* tag; otherwise the last tag with its last number + 1 (see
 #    scripts/extension-version.mjs). For a minor or major, bump package.json by hand. If the version is already
-#    published, the workflow ends without error;
+#    published, the workflow ends without error. An Open VSX failure only warns: the release is still made;
 #  - when a tag such as "v0.5.1" is pushed (the published version is the tag's);
 #  - manually, from Actions → Run workflow.
 on:
@@ -82,15 +82,13 @@ jobs:
 
       # The release body comes from the CHANGELOG (never from PR or commit titles) and is written BEFORE packaging
       # and publishing: a failure here stops everything after it (Marketplace, Open VSX and the release).
-      # Only a branch push (the automatic patch) accepts the neutral note when there is nothing to say; a tag or a
-      # manual run without text fails. The decision reaches the shell through env (ALLOW_NEUTRAL), never inside run.
+      # Only a minor or major version (patch number 0) must have a CHANGELOG section of its own: a patch accepts the
+      # neutral note in every trigger, so the documented recovery (pushing the tag by hand or a manual run) works for
+      # an automatic patch. The rule lives in the script ("auto" mode), never in an expression over event inputs.
       - name: Release notes (from the CHANGELOG)
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          ALLOW_NEUTRAL: ${{ github.event_name == 'push' && github.ref_type == 'branch' && 'true' || 'false' }}
-        run: |
-          if [ "$ALLOW_NEUTRAL" = "true" ]; then MODE=neutral; else MODE=strict; fi
-          node scripts/release-notes.mjs "$VERSION" "$RUNNER_TEMP/release-notes.md" "$MODE"
+        run: node scripts/release-notes.mjs "$VERSION" "$RUNNER_TEMP/release-notes.md" auto
 
       - run: npm run package
         env:
@@ -124,6 +122,7 @@ jobs:
           fi
 
       - name: Publish to Open VSX (VSCodium, Cursor…)
+        continue-on-error: true
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -140,7 +139,9 @@ jobs:
           if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -qi "already published\|already exists"; then
             echo "::notice::The version is already on Open VSX: nothing to do."
           elif [ "$CODE" -ne 0 ]; then
-            exit "$CODE"
+            # Open VSX is optional: its failure (for example an unclaimed namespace) must never stop the tag and the
+            # GitHub release of a version the Marketplace already has.
+            echo "::warning::Open VSX publication failed (exit code $CODE); the Marketplace publication and the GitHub release are not affected."
           fi
 
       # On a tag push, attaches to that tag's release; on a new publication from main or a manual run, or when

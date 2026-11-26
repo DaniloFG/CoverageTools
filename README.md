@@ -2,8 +2,7 @@
 
 **See the test coverage of your whole workspace at once, in VS Code's native coverage UI.**
 
-Version 0.1.0 is the first release. See [What's included](#whats-included)
-and [CHANGELOG.md](CHANGELOG.md).
+See [What's included](#whats-included) and [CHANGELOG.md](CHANGELOG.md).
 
 ## The problem
 
@@ -285,22 +284,22 @@ against them:
 
 ## What's included
 
-| Feature | Status |
-|---------|--------|
-| Accumulated coverage in the native UI | Released in 0.1.0 |
-| Status bar total, matching the native percentage | Released in 0.1.0 |
-| Show Coverage and Clear Coverage | Released in 0.1.0 |
-| Automatic detection of coverage reports (Cobertura, Istanbul JSON, LCOV, coverage.py data) | Released in 0.1.0 |
-| Run All Coverage | Released in 0.1.0 |
-| Run Coverage Here (Explorer right-click) | Released in 0.1.0 |
-| .NET support: VSTest | Released in 0.1.0 |
-| .NET support: Microsoft.Testing.Platform | Released in 0.1.0 |
-| Node support: Jest | Released in 0.1.0 |
-| Node support: Vitest | Released in 0.1.0 |
-| Node support: any other tool, through c8 | Released in 0.1.0 |
-| Python support: pytest and unittest | Released in 0.1.0 |
-| Custom command per project | Released in 0.1.0 |
-| Read-only mode in untrusted workspaces | Released in 0.1.0 |
+| Feature |
+|---------|
+| Accumulated coverage in the native UI |
+| Status bar total, matching the native percentage |
+| Show Coverage and Clear Coverage |
+| Automatic detection of coverage reports (Cobertura, Istanbul JSON, LCOV, coverage.py data) |
+| Run All Coverage |
+| Run Coverage Here (Explorer right-click) |
+| .NET support: VSTest |
+| .NET support: Microsoft.Testing.Platform |
+| Node support: Jest |
+| Node support: Vitest |
+| Node support: any other tool, through c8 |
+| Python support: pytest and unittest |
+| Custom command per project |
+| Read-only mode in untrusted workspaces |
 
 ## Installation
 

@@ -62,13 +62,17 @@ before packaging. If that version is already on the Marketplace, the workflow en
 error and without a new release.
 
 The release notes come from `CHANGELOG.md`: the `## [<version>]` section when there is one,
-otherwise the **Done** list under `## [Unreleased]`. With nothing to say, a merge to `main`
-publishes a "Maintenance release." note, while a tag or a manual run fails until the changelog
-says what users get.
+otherwise the **Done** list under `## [Unreleased]`. With nothing to say, a patch version (last
+number other than 0) publishes a "Maintenance release." note in every trigger (merge, tag or
+manual run), while a minor or major version (last number 0) fails until the changelog has a
+`## [<version>]` section that says what users get.
 
 Every new publication creates the GitHub release `v<version>` with the `.vsix` attached, and
 the `.vsix` is also kept as the `coverage-tools-vsix` artifact of the run. If a release is
-missing after a successful Marketplace publish, push the tag `v<version>` by hand.
+missing after a successful Marketplace publish, push the tag `v<version>` by hand (or run the
+workflow manually with that version); this works for an automatic patch even without a
+changelog section. A failed Open VSX publication only shows a warning: it never blocks the
+release.
 
 `vsce` and `ovsx` are pinned in `devDependencies` and run with `npx --no-install`, so a
 publication never downloads a different version of either tool.
@@ -88,4 +92,4 @@ In the GitHub repository, open *Settings → Secrets and variables → Actions* 
 If `VSCE_PAT` is not configured, the workflow still builds, tests and packages the extension,
 shows a warning that nothing went to the Marketplace, and only attaches the `.vsix` to the
 GitHub release `v<version>` (and to the run's artifacts). Without `OVSX_PAT`, Open VSX is
-skipped silently.
+skipped silently; with it, a failure (for example an unclaimed `DaniloFG` namespace) is only a warning.
