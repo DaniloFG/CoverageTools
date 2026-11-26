@@ -188,12 +188,12 @@ against them:
 |---------|---------|---------|
 | `coverageTools.watch.enabled` | `true` | Detect coverage reports written by runs made outside the extension (terminal, tasks, scripts) |
 | `coverageTools.watch.globs` | the seven report patterns listed above | Glob patterns, relative to each workspace folder, of the coverage reports to detect |
-| `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/__pycache__/**` | Paths ignored during discovery and watching |
+| `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/.tox/**`, `**/.nox/**`, `**/.conda/**`, `**/site-packages/**`, `**/build/lib/**`, `**/__pycache__/**` | Paths ignored during discovery and watching |
 | `coverageTools.nestedProjects` | `inner` | When test projects of the same ecosystem are nested, run the inner ones (`inner`) or the outer one (`outer`) |
 | `coverageTools.dotnet.collector` | `""` (chosen from the project's packages) | Forces the value passed to `--collect` for VSTest projects, for example `XPlat Code Coverage` |
 | `coverageTools.dotnet.extraArgs` | `[]` | Extra arguments for .NET test runs: for VSTest projects they are added to `dotnet test`; for Microsoft.Testing.Platform projects they are passed to the test application (after `--`) |
 | `coverageTools.node.extraArgs` | `[]` | Extra arguments for the Node test command (Jest, Vitest, or the test script run under c8) |
-| `coverageTools.python.interpreter` | `""` (auto-detect) | Python interpreter used to run tests and convert `.coverage` files. Empty: the project's `.venv` or `venv`, then the interpreter selected in the Python extension, then `python3` |
+| `coverageTools.python.interpreter` | `""` (auto-detect) | Python interpreter used to run tests and convert `.coverage` files. Empty: the project's `.venv` or `venv`, then the interpreter selected in the Python extension, then `python3` (on Windows: `py`, `python`, `python3`) |
 | `coverageTools.python.extraArgs` | `[]` | Extra arguments for the Python test runner (pytest or unittest) |
 | `coverageTools.commands` | `{}` | Your own coverage command per project: maps a project directory, relative to the workspace folder, to a command line run there through the shell. `${coverageDir}` is replaced with a temporary directory where the command must write an Istanbul JSON, Cobertura or LCOV report. The directory becomes a project (full runs only) and replaces any project found inside it |
 
