@@ -1,0 +1,178 @@
+import path from 'node:path';
+import { expect, test } from 'vitest';
+import { createRequire } from 'node:module';
+import { C8_EXCLUDES, c8BinPath, nodeGenericAdapter } from '../../../src/adapters/nodeGeneric';
+import { matchesAny } from '../../../src/glob';
+import type { FsReader, PlanContext, Project } from '../../../src/adapters/types';
+import { DEFAULT_SETTINGS, type Settings } from '../../../src/settings';
+import { memoryFs } from './memoryFs';
+
+const dir = path.resolve('/w/app');
+const pkgFile = path.join(dir, 'package.json');
+const tmp = path.resolve('/tmp/ct-1');
+const c8 = path.resolve('/ext/node_modules/c8/bin/c8.js');
+const PLACEHOLDER = 'echo "Error: no test specified" && exit 1';
+/** @istanbuljs/schema 0.1.6's default-exclude, expanded: c8's --exclude replaces it, so it is passed again. */
+const SCHEMA_EXTENSIONS = '.js,.cjs,.mjs,.ts,.tsx,.jsx'.split(',').map(e => e.slice(1)).join(',');
+const SCHEMA_DEFAULTS = [
+  'coverage/**', 'packages/*/test{,s}/**', '**/*.d.ts', 'test{,s}/**', `test{,-*}.{${SCHEMA_EXTENSIONS}}`,
+  `**/*{.,-}test.{${SCHEMA_EXTENSIONS}}`, '**/__tests__/**', '**/{ava,babel,nyc}.config.{js,cjs,mjs}',
+  '**/jest.config.{js,cjs,mjs,ts}', '**/{karma,rollup,webpack}.config.js', '**/.{eslint,mocha}rc.{js,cjs}',
+];
+/** Mocha's spec conventions and Yarn Berry's in-project package manager, which runs inside the wrapped process. */
+const EXTRA_EXCLUDES = [`**/*{.,-}spec.{${SCHEMA_EXTENSIONS}}`, 'spec{,s}/**', '.yarn/**', '.pnp.*'];
+const C8_ARGS = [
+  c8, '--reporter=json', `--reports-dir=${tmp}`, `--temp-directory=${path.join(tmp, 'v8')}`,
+  ...[...SCHEMA_DEFAULTS, ...EXTRA_EXCLUDES].map(g => `--exclude=${g}`),
+];
+const HINT = 'No coverage report was produced. Coverage for this project is collected with c8, which needs Node.js 18 or later.';
+const OWN_TOOL_HINT = 'The test script runs its own coverage tool but wrote no report the extension can read. Add an "lcov" or "json" reporter.';
+
+function pkg(value: object): string {
+  return JSON.stringify(value);
+}
+
+function ctx(fs: FsReader, settings: Partial<Settings> = {}): PlanContext {
+  return {
+    tmpDir: tmp, fs, settings: { ...DEFAULT_SETTINGS, ...settings }, c8Bin: c8,
+    probe: async () => ({ code: 0, stdout: '' }),
+  };
+}
+
+async function detected(files: Record<string, string>, candidate = pkgFile): Promise<Project | undefined> {
+  return nodeGenericAdapter.detect(candidate, memoryFs(files));
+}
+
+async function projectOf(files: Record<string, string>): Promise<{ project: Project; fs: FsReader }> {
+  const fs = memoryFs(files);
+  const project = await nodeGenericAdapter.detect(pkgFile, fs);
+  if (project === undefined) throw new Error('not detected');
+  return { project, fs };
+}
+
+test('detects a real test script or a .mocharc.* file; rejects the npm init placeholder', async () => {
+  expect(await detected({ [pkgFile]: pkg({ name: 'app', scripts: { test: 'mocha' } }) })).toEqual({
+    key: `project:${pkgFile}`, adapter: 'node-generic', ecosystem: 'node', dir, definingFile: pkgFile,
+    name: 'app', supportsPartial: false, meta: {},
+  });
+  expect((await detected({ [pkgFile]: pkg({ scripts: { test: 'node --test' } }) }, dir))?.name).toBe('app');
+  for (const ext of ['js', 'cjs', 'mjs', 'json', 'jsonc', 'yaml', 'yml']) {
+    expect((await detected({ [pkgFile]: pkg({}), [path.join(dir, `.mocharc.${ext}`)]: '' }))?.adapter, ext).toBe('node-generic');
+  }
+  expect(await detected({ [pkgFile]: pkg({ scripts: { test: PLACEHOLDER } }) })).toBeUndefined();
+  expect(await detected({ [pkgFile]: pkg({ scripts: { test: `  ${PLACEHOLDER} ` } }) })).toBeUndefined();
+  expect(await detected({ [pkgFile]: pkg({ scripts: { test: '' } }) })).toBeUndefined();
+  expect(await detected({ [pkgFile]: pkg({ scripts: { build: 'tsc' } }) })).toBeUndefined();
+  expect(await detected({ [path.join(dir, '.mocharc.json')]: '{}' })).toBeUndefined();
+  expect(await detected({ [pkgFile]: '{ not json' })).toBeUndefined();
+});
+
+test('Jest and Vitest projects are not generic Node projects', async () => {
+  expect(await detected({ [pkgFile]: pkg({ scripts: { test: 'jest' } }) })).toBeUndefined();
+  expect(await detected({ [pkgFile]: pkg({ jest: {}, scripts: { test: 'node t.js' } }) })).toBeUndefined();
+  expect(await detected({ [pkgFile]: pkg({ scripts: { test: 'vitest run' } }) })).toBeUndefined();
+  expect(await detected({ [pkgFile]: pkg({ scripts: { test: 'eslint . && mocha' } }), [path.join(dir, 'vitest.config.ts')]: '' })).toBeUndefined();
+});
+
+test('supportsPartial is false', async () => {
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'mocha' } }) });
+  expect(project.supportsPartial).toBe(false);
+  expect(await nodeGenericAdapter.isTestFile(project, path.join(dir, 'test', 'a.test.js'), fs)).toBe(false);
+});
+
+test('full plan wraps the test command in the bundled c8 run by node', async () => {
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'mocha' } }) });
+  const plan = await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs));
+  expect(plan).toEqual({
+    steps: [{ command: 'node', args: [...C8_ARGS, 'npm', 'run', 'test'], cwd: dir }],
+    reportSearchDir: tmp,
+    hint: HINT,
+  });
+  const yarn = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'eslint . && mocha' } }), [path.join(dir, 'yarn.lock')]: '' });
+  expect((await nodeGenericAdapter.plan(yarn.project, { kind: 'full' }, ctx(yarn.fs, { nodeExtraArgs: ['--bail'] }))).steps).toEqual([
+    { command: 'node', args: [...C8_ARGS, 'yarn', 'run', 'test', '--bail'], cwd: dir },
+  ]);
+  const npmExtra = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'mocha' } }) });
+  expect((await nodeGenericAdapter.plan(npmExtra.project, { kind: 'full' }, ctx(npmExtra.fs, { nodeExtraArgs: ['--bail'] }))).steps[0].args)
+    .toEqual([...C8_ARGS, 'npm', 'run', 'test', '--', '--bail']);
+});
+
+test('without a script but with .mocharc.*, the wrapped command is the local mocha binary', async () => {
+  const npm = await projectOf({ [pkgFile]: pkg({}), [path.join(dir, '.mocharc.yml')]: '' });
+  expect((await nodeGenericAdapter.plan(npm.project, { kind: 'full' }, ctx(npm.fs))).steps).toEqual([
+    { command: 'node', args: [...C8_ARGS, 'npx', '--no-install', 'mocha'], cwd: dir },
+  ]);
+  const pnpm = await projectOf({ [pkgFile]: pkg({ scripts: { test: PLACEHOLDER } }), [path.join(dir, '.mocharc.json')]: '', [path.join(dir, 'pnpm-lock.yaml')]: '' });
+  expect((await nodeGenericAdapter.plan(pnpm.project, { kind: 'full' }, ctx(pnpm.fs))).steps[0].args).toEqual([...C8_ARGS, 'pnpm', 'exec', 'mocha']);
+});
+
+test('a script that already calls nyc or c8 is run unwrapped and the report is searched in the project', async () => {
+  for (const test of ['nyc --reporter=lcov mocha', 'c8 node --test', 'cross-env NODE_ENV=test nyc mocha', 'npx nyc mocha',
+    './node_modules/.bin/c8 --reporter=lcov mocha', 'mocha && nyc report --reporter=lcov', 'npm run cov', 'yarn cov']) {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test, cov: 'nyc mocha' } }) });
+    const plan = await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs));
+    expect(plan, test).toEqual({ steps: [{ command: 'npm', args: ['run', 'test'], cwd: dir }], reportSearchDir: dir, hint: OWN_TOOL_HINT });
+  }
+  // Paths and names that merely contain nyc or c8 are other tools.
+  for (const test of ['my-nyc-thing mocha', 'mocha --reporter nyc-like', 'node scripts/c8.js', 'mocha test/nyc']) {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test } }) });
+    expect((await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps[0].command, test).toBe('node');
+  }
+});
+
+test('the lockfile search stops at project.meta.workspaceFolder', async () => {
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'mocha' } }), [path.resolve('/w/yarn.lock')]: '' });
+  expect((await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps[0].args[C8_ARGS.length]).toBe('yarn');
+  const bounded = { ...project, meta: { workspaceFolder: dir } };
+  expect((await nodeGenericAdapter.plan(bounded, { kind: 'full' }, ctx(fs))).steps[0].args[C8_ARGS.length]).toBe('npm');
+});
+
+test('the copied c8 default excludes match the installed @istanbuljs/schema', async () => {
+  const require = createRequire(path.join(process.cwd(), 'node_modules', 'c8', 'package.json'));
+  const installed: string[] = require('@istanbuljs/schema/default-exclude');
+  expect(C8_EXCLUDES).toEqual([...installed, ...EXTRA_EXCLUDES]);
+  expect(installed).toEqual(SCHEMA_DEFAULTS);
+});
+
+test('spec files and Yarn Berry files are excluded from c8 coverage', () => {
+  const excluded = (p: string) => matchesAny(p, C8_EXCLUDES);
+  for (const p of ['src/calc.spec.js', 'src/calc-spec.ts', 'spec/add.js', 'specs/a/b.js', '.yarn/releases/yarn-4.5.0.cjs', '.pnp.cjs', '.pnp.loader.mjs', 'test/a.js', 'src/a.test.js']) {
+    expect(excluded(p), p).toBe(true);
+  }
+  for (const p of ['src/calc.js', 'src/spec.js', 'lib/inspector.js', 'src/yarn.js']) expect(excluded(p), p).toBe(false);
+});
+
+test('a watch-mode test script gets no steps and a hint', async () => {
+  const hint = 'The test script runs in watch mode, so it never finishes. Remove the watch flag or set a command for this project in "coverageTools.commands".';
+  for (const test of ['mocha --watch', 'mocha -w', 'node --test --watch', 'node --watch-path=src --test', 'npm run unit -- --watch', 'yarn unit -w', 'tsc && mocha --watch=true']) {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test, unit: 'mocha' } }) });
+    expect(await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs)), test).toEqual({ steps: [], reportSearchDir: tmp, hint });
+  }
+  for (const test of ['mocha --watch=false', 'node --test', 'node scripts/gen.js -w && mocha', 'nyc mocha']) {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test } }) });
+    expect((await nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs))).steps, test).toHaveLength(1);
+  }
+});
+
+test('c8BinPath points into the extension\'s node_modules', () => {
+  expect(c8BinPath(path.resolve('/ext'))).toBe(c8);
+});
+
+test('tools that watch by default get their non-watch flag, or the watch hint when it cannot be added', async () => {
+  const run = async (test: string) => {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test } }) });
+    return nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs));
+  };
+  const tail = async (test: string) => (await run(test)).steps[0].args.slice(C8_ARGS.length);
+  expect(await tail('karma start')).toEqual(['npm', 'run', 'test', '--', '--single-run']);
+  expect(await tail('karma start karma.conf.js')).toEqual(['npm', 'run', 'test', '--', '--single-run']);
+  expect(await tail('ng test')).toEqual(['npm', 'run', 'test', '--', '--watch=false']);
+  expect(await tail('npx ng test --code-coverage')).toEqual(['npm', 'run', 'test', '--', '--watch=false']);
+  for (const test of ['karma start --single-run', 'karma start --no-auto-watch', 'ng test --watch=false', 'ng test --no-watch', 'ng build']) {
+    expect(await tail(test), test).toEqual(['npm', 'run', 'test']);
+  }
+  // The flag would reach the wrong command when the watching tool is not the last one.
+  const hint = (await run('karma start && node report.js')).hint;
+  expect((await run('karma start && node report.js')).steps).toEqual([]);
+  expect(hint).toContain('watch mode');
+});

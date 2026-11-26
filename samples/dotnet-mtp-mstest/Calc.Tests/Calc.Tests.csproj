@@ -1,0 +1,14 @@
+<Project Sdk="MSTest.Sdk/4.5.3">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <!-- MSTest.Sdk adds the Microsoft.Testing.Extensions.CodeCoverage package through this property. -->
+    <EnableMicrosoftTestingExtensionsCodeCoverage>true</EnableMicrosoftTestingExtensionsCodeCoverage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Calc\Calc.csproj" />
+  </ItemGroup>
+
+</Project>

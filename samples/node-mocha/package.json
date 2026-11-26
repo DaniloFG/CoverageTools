@@ -1,0 +1,12 @@
+{
+  "name": "node-mocha-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coverage Tools sample: a JavaScript Mocha project, measured with the bundled c8.",
+  "scripts": {
+    "test": "mocha"
+  },
+  "devDependencies": {
+    "mocha": "11.7.5"
+  }
+}

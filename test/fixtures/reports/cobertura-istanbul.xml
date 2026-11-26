@@ -1,0 +1,32 @@
+<?xml version="1.0" ?>
+<!DOCTYPE coverage SYSTEM "http://cobertura.sourceforge.net/xml/coverage-04.dtd">
+<coverage lines-valid="3" lines-covered="2" line-rate="0.6666" branches-valid="2" branches-covered="1" branch-rate="0.5" timestamp="1764000000000" complexity="0" version="0.1">
+  <sources>
+    <source>/w</source>
+  </sources>
+  <packages>
+    <package name="src" line-rate="0.6666" branch-rate="0.5">
+      <classes>
+        <class name="math.js" filename="src/math.js" line-rate="0.6666" branch-rate="0.5">
+          <methods>
+            <method name="add" hits="3" signature="()V">
+              <lines>
+                <line number="1" hits="3"/>
+              </lines>
+            </method>
+            <method name="(anonymous_1)" hits="0" signature="()V">
+              <lines>
+                <line number="4" hits="0"/>
+              </lines>
+            </method>
+          </methods>
+          <lines>
+            <line number="2" hits="3" branch="false"/>
+            <line number="3" hits="3" branch="true" condition-coverage="50% (1/2)"/>
+            <line number="5" hits="0" branch="false"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

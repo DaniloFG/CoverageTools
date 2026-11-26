@@ -1,0 +1,123 @@
+import { writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { afterEach, expect, test } from 'vitest';
+import {
+  closeAll, copyWorkspace, coverageRowText, COVERAGE_VIEW, istanbul, launchVSCode, lcov, outputChannelText, waitFor,
+  waitForCoverageRow, waitForLoaded, waitUntilWatching, writeReport, writeReportUntil,
+  type VSCodeSession,
+} from './harness';
+
+const repoRoot = resolve(import.meta.dirname, '..', '..');
+const fixture = join(import.meta.dirname, 'fixtures', 'watch-workspace');
+const STATUS_ITEM = '[id="DaniloFG.coverage-tools.coverageTools.status"]';
+
+/** a.js lives in folder `one`, b.js in folder `two`; lines 1, 2 and 4 hold code. */
+const A_FULL = lcov({ 'a.js': [[1, 1], [2, 1], [4, 1]] });
+const A_THIRD = lcov({ 'a.js': [[1, 1], [2, 0], [4, 0]] });
+const B_NONE = lcov({ 'b.js': [[1, 0], [2, 0], [4, 0]] });
+
+let s: VSCodeSession;
+let ws: string;
+
+afterEach((ctx) => closeAll(ctx));
+
+async function start(prepare?: (ws: string) => Promise<void>): Promise<void> {
+  ws = await copyWorkspace(fixture);
+  await prepare?.(ws);
+  s = await launchVSCode({ extensionPath: repoRoot, workspace: join(ws, 'watch.code-workspace') });
+  await waitUntilWatching(s, [join(ws, 'one'), join(ws, 'two')]);
+}
+
+/** Writes a report once (the extension is watching) and waits until the watcher has loaded it. */
+async function writeLoaded(path: string, content: string): Promise<void> {
+  await writeReport(path, content);
+  await waitForLoaded(s, path);
+}
+
+const statusVisible = (): Promise<boolean> => s.page.locator(STATUS_ITEM).isVisible();
+
+const rowText = (name: string): Promise<string> => coverageRowText(s, name);
+const rowShows = (name: string, percent: string): Promise<void> => waitForCoverageRow(s, name, percent);
+
+const outputText = (): Promise<string> => outputChannelText(s);
+
+test('a report written to the workspace is picked up without any command', async () => {
+  await start();
+  await writeLoaded(join(ws, 'one', 'coverage', 'lcov.info'), A_FULL);
+  await rowShows('a.js', '100.00%');
+});
+
+test('reports from two folders accumulate; rewriting one keeps the other', async () => {
+  await start();
+  await writeLoaded(join(ws, 'one', 'coverage', 'lcov.info'), A_FULL);
+  await rowShows('a.js', '100.00%');
+  await writeLoaded(join(ws, 'two', 'coverage', 'lcov.info'), B_NONE);
+  await rowShows('b.js', '0.00%');
+  expect(await rowText('a.js')).toMatch(/(^|[^\d.])100\.00%/);
+  await writeLoaded(join(ws, 'one', 'coverage', 'lcov.info'), A_THIRD);
+  await rowShows('a.js', '33.33%');
+  expect(await rowText('b.js')).toMatch(/(^|[^\d.])0\.00%/);
+});
+
+test('a truncated report keeps the previous coverage and is retried once after 1 s', async () => {
+  await start();
+  const report = join(ws, 'one', 'coverage', 'coverage-final.json');
+  const a = join(ws, 'one', 'a.js');
+  await writeLoaded(report, istanbul({ [a]: [[1, 1], [2, 1], [4, 1]] }));
+  await rowShows('a.js', '100.00%');
+
+  const next = istanbul({ [a]: [[1, 1], [2, 0], [4, 0]] });
+  await writeReport(report, next.slice(0, Math.floor(next.length / 2)));
+  // Both attempts (the first read and the retry) are logged with a timestamp.
+  const attempt = /(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}) \[info\] Could not read the coverage report/g;
+  const times = await waitFor(async () => {
+    const found = [...(await outputText()).matchAll(attempt)].map((m) => Date.parse(m[1].replace(' ', 'T')));
+    return found.length >= 2 ? found : undefined;
+  }, 30_000, 'two logged attempts at the truncated report');
+  expect(times).toHaveLength(2);
+  expect(times[1] - times[0]).toBeGreaterThanOrEqual(1_000);
+  expect(times[1] - times[0]).toBeLessThan(2_000);
+  await rowShows('a.js', '100.00%');
+
+  await writeLoaded(report, next);
+  await rowShows('a.js', '33.33%');
+});
+
+test('a report that becomes empty closes the coverage display', async () => {
+  await start();
+  const report = join(ws, 'one', 'coverage', 'coverage-final.json');
+  await writeLoaded(report, istanbul({ [join(ws, 'one', 'a.js')]: [[1, 1], [2, 1], [4, 1]] }));
+  await rowShows('a.js', '100.00%');
+  await writeReport(report, '{}');
+  await waitFor(async () => !(await s.page.locator(COVERAGE_VIEW).isVisible()), 10_000, 'the Test Coverage view to close');
+  await waitFor(async () => !(await statusVisible()), 10_000, 'the status bar item to hide');
+});
+
+test('a report already on disk at startup is not loaded', async () => {
+  await start((dir) => writeReport(join(dir, 'one', 'coverage', 'lcov.info'), A_FULL));
+  await writeLoaded(join(ws, 'two', 'coverage', 'lcov.info'), B_NONE);
+  const text = await s.coverageViewText('b.js');
+  expect(text).not.toContain('a.js');
+  expect(await outputText()).not.toContain(`Loaded ${join(ws, 'one')}`);
+});
+
+test('reports under excluded folders are ignored', async () => {
+  await start();
+  await writeReport(join(ws, 'one', 'node_modules', 'pkg', 'coverage', 'lcov.info'), A_FULL);
+  await writeLoaded(join(ws, 'two', 'coverage', 'lcov.info'), B_NONE);
+  const text = await s.coverageViewText('b.js');
+  expect(text).not.toContain('a.js');
+});
+
+test('with coverageTools.watch.enabled false nothing is picked up', async () => {
+  const settings = (ws: string): string => join(ws, 'one', '.vscode', 'settings.json');
+  await start((dir) => writeReport(settings(dir), JSON.stringify({ 'coverageTools.watch.enabled': false })));
+  await writeReport(join(ws, 'one', 'coverage', 'lcov.info'), A_FULL);
+  // Folder `two` still watches: once its report shows, folder one's earlier report would have too.
+  await writeLoaded(join(ws, 'two', 'coverage', 'lcov.info'), B_NONE);
+  expect(await s.coverageViewText('b.js')).not.toContain('a.js');
+  // Turning it back on starts watching folder one.
+  await writeFile(settings(ws), JSON.stringify({ 'coverageTools.watch.enabled': true }));
+  await writeReportUntil(join(ws, 'one', 'coverage', 'lcov.info'), A_THIRD, async () => (await s.coverageViewText()).includes('a.js'));
+  await rowShows('a.js', '33.33%');
+});

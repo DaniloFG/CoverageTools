@@ -1,0 +1,13 @@
+{
+  "name": "node-mocha-ts-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coverage Tools sample: a TypeScript Mocha project run through tsx, measured with the bundled c8.",
+  "scripts": {
+    "test": "mocha --import=tsx"
+  },
+  "devDependencies": {
+    "mocha": "11.7.5",
+    "tsx": "4.21.0"
+  }
+}

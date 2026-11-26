@@ -1,0 +1,9 @@
+{
+  "name": "node-test-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coverage Tools sample: tests run by node --test, without dependencies.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

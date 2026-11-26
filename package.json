@@ -1,0 +1,240 @@
+{
+  "name": "coverage-tools",
+  "displayName": "Coverage Tools",
+  "description": "Run tests with coverage and show the results in VS Code's native coverage view.",
+  "version": "0.1.0",
+  "publisher": "DaniloFG",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#149A82",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/DaniloFG/CoverageTools#readme",
+  "bugs": {
+    "url": "https://github.com/DaniloFG/CoverageTools/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DaniloFG/CoverageTools"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Testing"
+  ],
+  "keywords": [
+    "coverage",
+    "code coverage",
+    "test coverage",
+    "testing",
+    "jest",
+    "vitest",
+    "dotnet",
+    "pytest",
+    "c8",
+    "istanbul",
+    "cobertura",
+    "lcov"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In untrusted workspaces Coverage Tools only reads coverage reports; it does not run any command."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "coverageTools.runAll",
+        "title": "Run All Coverage",
+        "category": "Coverage Tools",
+        "icon": "$(run-all-coverage)",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "coverageTools.runHere",
+        "title": "Run Coverage Here",
+        "category": "Coverage Tools",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "coverageTools.show",
+        "title": "Show Coverage",
+        "category": "Coverage Tools"
+      },
+      {
+        "command": "coverageTools.clear",
+        "title": "Clear Coverage",
+        "category": "Coverage Tools"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "coverageTools.runHere",
+          "when": "false"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "coverageTools.runHere",
+          "when": "isWorkspaceTrusted && resourcePath in coverageTools.runnablePaths",
+          "group": "2_workspace@90"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "coverageTools.runAll",
+          "when": "view == workbench.view.testing",
+          "group": "navigation@90"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Coverage Tools",
+      "properties": {
+        "coverageTools.watch.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Detect coverage reports written by runs made outside the extension (terminal, tasks, scripts)."
+        },
+        "coverageTools.watch.globs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "scope": "resource",
+          "default": [
+            "**/TestResults/**/*.cobertura.xml",
+            "**/coverage/coverage-final.json",
+            "**/coverage/lcov.info",
+            "**/coverage/cobertura-coverage.xml",
+            "**/coverage.xml",
+            "**/coverage.lcov",
+            "**/.coverage"
+          ],
+          "description": "Glob patterns, relative to each workspace folder, of the coverage reports to detect."
+        },
+        "coverageTools.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "scope": "resource",
+          "default": [
+            "**/node_modules/**",
+            "**/bin/**",
+            "**/obj/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/.tox/**",
+            "**/.nox/**",
+            "**/.conda/**",
+            "**/site-packages/**",
+            "**/build/lib/**",
+            "**/__pycache__/**"
+          ],
+          "description": "Glob patterns, relative to each workspace folder, of paths ignored during discovery and watching."
+        },
+        "coverageTools.nestedProjects": {
+          "type": "string",
+          "enum": [
+            "inner",
+            "outer"
+          ],
+          "enumDescriptions": [
+            "Run the inner projects; the outer project is not run.",
+            "Run the outer project only; it is expected to run the inner ones."
+          ],
+          "default": "inner",
+          "scope": "resource",
+          "description": "When test projects of the same ecosystem are nested, run the inner ones (`inner`) or the outer one (`outer`)."
+        },
+        "coverageTools.dotnet.collector": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Forces the value passed to `--collect` when running VSTest projects (for example `XPlat Code Coverage`). Empty: chosen from the project's packages."
+        },
+        "coverageTools.dotnet.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments for `dotnet test` (VSTest) or for the test application (Microsoft.Testing.Platform)."
+        },
+        "coverageTools.node.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments for the Node test command (Jest, Vitest, or the test script run under c8)."
+        },
+        "coverageTools.python.interpreter": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Python interpreter used to run tests and convert `.coverage` files. Empty: the project's `.venv` or `venv`, then the interpreter selected in the Python extension, then `python3`."
+        },
+        "coverageTools.python.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "Extra arguments for the Python test runner (pytest or unittest)."
+        },
+        "coverageTools.commands": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "scope": "resource",
+          "markdownDescription": "Your own coverage command per project: maps a project directory, relative to the workspace folder, to a command line run in that directory through the shell. `${coverageDir}` is replaced with a temporary directory where the command must write an Istanbul JSON, Cobertura or LCOV report. The directory becomes a project (full runs only) and replaces any project found inside it."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs --production",
+    "vscode:prepublish": "npm run build",
+    "lint": "tsc --noEmit && eslint src test scripts",
+    "test": "npm run build && vitest run --project unit",
+    "test:e2e": "vitest run --project e2e",
+    "test:perf": "vitest run --project perf",
+    "test:ui": "node esbuild.mjs && node test/ui/run.mjs",
+    "check:size": "node scripts/check-size.mjs",
+    "screenshots": "node scripts/screenshots.mjs",
+    "package": "node -e \"require('fs').mkdirSync('release',{recursive:true})\" && vsce package --no-yarn --baseContentUrl https://github.com/DaniloFG/CoverageTools/blob/main --baseImagesUrl https://github.com/DaniloFG/CoverageTools/raw/main --out release/"
+  },
+  "dependencies": {
+    "c8": "^10.1.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/vscode": "1.90.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "ovsx": "^1.4.0",
+    "playwright-core": "^1.65.1",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.74.0",
+    "vitest": "~4.0.18",
+    "yaml": "^2.9.1"
+  }
+}

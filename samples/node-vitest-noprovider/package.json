@@ -1,0 +1,12 @@
+{
+  "name": "node-vitest-noprovider-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coverage Tools sample: a Vitest project without a coverage provider installed.",
+  "scripts": {
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "4.0.18"
+  }
+}

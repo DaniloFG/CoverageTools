@@ -1,0 +1,5 @@
+# Text files are checked out with LF on every OS, so Windows CI reads the same bytes as Linux.
+# Solution files are stored with CRLF, as Visual Studio writes them, and are kept as they are.
+* text=auto eol=lf
+*.sln -text
+*.png binary

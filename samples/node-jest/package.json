@@ -1,0 +1,12 @@
+{
+  "name": "node-jest-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coverage Tools sample: a Jest project managed with yarn.",
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "29.7.0"
+  }
+}

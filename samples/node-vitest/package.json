@@ -1,0 +1,13 @@
+{
+  "name": "node-vitest-sample",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coverage Tools sample: a TypeScript Vitest project managed with npm.",
+  "scripts": {
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.0.18",
+    "vitest": "4.0.18"
+  }
+}
