@@ -5,6 +5,7 @@ import { CoverageStore } from '../../../src/store';
 const h = vi.hoisted(() => ({
   runs: 0,
   ended: 0,
+  commands: [] as string[],
   added: [] as unknown[][],
   handler: undefined as undefined | ((...args: unknown[]) => unknown),
   profile: undefined as undefined | { loadDetailedCoverage?: (...args: unknown[]) => Promise<unknown> },
@@ -23,7 +24,7 @@ vi.mock('vscode', () => ({
   StatementCoverage: class { constructor(public executed: number, public location: unknown, public branches: unknown[] = []) {} },
   BranchCoverage: class { constructor(public executed: number, public location?: unknown, public label?: string) {} },
   DeclarationCoverage: class { constructor(public name: string, public executed: number, public location: unknown) {} },
-  commands: { executeCommand: async () => undefined },
+  commands: { executeCommand: async (c: string) => { h.commands.push(c); } },
   tests: {
     createTestController: () => ({
       createRunProfile: (_label: string, _kind: number, handler: (...args: unknown[]) => unknown) => {
@@ -140,5 +141,90 @@ test('a large set is published in slices that give the event loop control back, 
   expect(h.added[0]).toHaveLength(3000);
   expect(h.ended).toBe(1);
   expect(settled).toBe(1);
+  publisher.dispose();
+});
+
+const slicing = { sliceMs: 0, yieldToLoop: () => new Promise<void>(resolve => setImmediate(resolve)) };
+const big = (n = 3000) => Array.from({ length: n }, (_, i) => f(`/w/f${String(i).padStart(4, '0')}.js`, 1));
+
+test('close runs the VS Code command only when something of ours was published', async () => {
+  const store = new CoverageStore();
+  const publisher = new Publisher(store);
+  h.commands.length = 0;
+  await publisher.close();
+  expect(h.commands).toEqual([]);
+  store.replace('a', [f('/w/a.js', 1)]);
+  await publisher.publishNow();
+  await publisher.close();
+  expect(h.commands).toEqual(['testing.coverage.close']);
+  await publisher.close();
+  expect(h.commands).toEqual(['testing.coverage.close']);
+  publisher.dispose();
+});
+
+test('a sliced publication superseded by an empty store leaves nothing displayed', async () => {
+  const store = new CoverageStore();
+  store.replace('a', big());
+  const publisher = new Publisher(store, slicing);
+  h.commands.length = 0;
+  h.ended = 0;
+  const done = publisher.publishNow();
+  store.clear('a');
+  await publisher.publishNow(); // The empty one.
+  await done;
+  expect(h.ended).toBe(1);
+  expect(h.commands).toEqual(['testing.coverage.close']);
+  publisher.dispose();
+});
+
+test('close while a publication is mid-slice stops it and closes the display', async () => {
+  const store = new CoverageStore();
+  store.replace('a', big());
+  const publisher = new Publisher(store, slicing);
+  h.commands.length = 0;
+  let settled = 0;
+  publisher.onDidSettle(() => settled++);
+  const done = publisher.publishNow();
+  await publisher.close();
+  await done;
+  expect(h.commands).toEqual(['testing.coverage.close']);
+  expect(settled).toBe(1); // The close's, not the stale publication's.
+  publisher.dispose();
+});
+
+test('dispose mid-slice stops the publication, closes the display and rejects nothing', async () => {
+  const store = new CoverageStore();
+  store.replace('a', big());
+  const publisher = new Publisher(store, slicing);
+  h.commands.length = 0;
+  const done = publisher.publishNow();
+  publisher.dispose();
+  await expect(done).resolves.toBeUndefined();
+  expect(h.commands).toEqual(['testing.coverage.close']);
+});
+
+test('a store change during a sliced publication stops it: its stale data does not settle', async () => {
+  const store = new CoverageStore();
+  store.replace('a', big());
+  const publisher = new Publisher(store, slicing);
+  let settled = 0;
+  publisher.onDidSettle(() => settled++);
+  const done = publisher.publishNow();
+  store.replace('b', [f('/w/other.js', 1)]);
+  await done;
+  expect(settled).toBe(0);
+  publisher.dispose();
+});
+
+test('loading the detail of many files computes the merged list once per store version', async () => {
+  const store = new CoverageStore();
+  store.replace('a', [f('/w/a1.js', 1), f('/w/a2.js', 1)]);
+  const publisher = new Publisher(store);
+  h.added.length = 0;
+  await publisher.publishNow();
+  const spy = vi.spyOn(store, 'merged');
+  for (const file of h.added[0]) await h.profile!.loadDetailedCoverage!({}, file, {});
+  for (const file of h.added[0]) await h.profile!.loadDetailedCoverage!({}, file, {});
+  expect(spy.mock.calls.length).toBeLessThanOrEqual(1);
   publisher.dispose();
 });

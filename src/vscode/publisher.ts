@@ -79,7 +79,8 @@ export class Publisher {
   /** Bumped by every publication and close: a sliced publication that is no longer the latest stops. */
   private generation = 0;
   /** `store.merged()` by path, for `loadDetailedCoverage`; rebuilt when the merged list changes. */
-  private index: { of: readonly MergedEntry[]; byPath: Map<string, MergedEntry> } | undefined;
+  private index: Map<string, MergedEntry> | undefined;
+  private disposed = false;
 
   constructor(private readonly store: CoverageStore, private readonly slices: SliceOptions = DEFAULT_SLICES) {
     this.controller = vscode.tests.createTestController('coverageTools', 'Coverage Tools');
@@ -97,6 +98,7 @@ export class Publisher {
     };
     this.subscription = store.onDidChange(() => {
       this.index = undefined; // Holds the superseded entries otherwise.
+      this.generation++; // A publication still slicing carries stale data: it stops.
       this.schedule();
     });
   }
@@ -118,24 +120,28 @@ export class Publisher {
   publishNow(): Promise<void> {
     this.cancelPending();
     const generation = ++this.generation;
-    let sliceStart = performance.now();
+    if (this.disposed) return Promise.resolve();
     const entries = this.store.merged();
     if (entries.length === 0) {
       this.published = new Map();
-      this.settled();
-      return Promise.resolve();
+      // A superseded publication may have fed a run already: nothing may stay displayed.
+      return this.shown ? this.close() : (this.settled(), Promise.resolve());
     }
-    return (async () => {
-      const published = new Map<string, AccumulatedFileCoverage>();
-      const request = new vscode.TestRunRequest(undefined, undefined, this.profile);
-      const run = this.controller.createTestRun(request, 'Coverage Tools', false);
+    return this.publish(entries, generation).catch(() => {
+      // The controller may be gone (dispose) or VS Code refused the run: a later change publishes again.
+    });
+  }
+
+  private async publish(entries: readonly MergedEntry[], generation: number): Promise<void> {
+    let sliceStart = performance.now();
+    const published = new Map<string, AccumulatedFileCoverage>();
+    const request = new vscode.TestRunRequest(undefined, undefined, this.profile);
+    const run = this.controller.createTestRun(request, 'Coverage Tools', false);
+    try {
       for (let i = 0; i < entries.length; i++) {
         if ((i & 63) === 63 && performance.now() - sliceStart >= this.slices.sliceMs) {
           await this.slices.yieldToLoop();
-          if (generation !== this.generation) {
-            run.end(); // A newer publication (or a close) took over.
-            return;
-          }
+          if (generation !== this.generation) return; // A newer publication, a store change or a close took over.
           sliceStart = performance.now();
         }
         const e = entries[i];
@@ -143,21 +149,30 @@ export class Publisher {
         const file = before?.shows(e.summary) ? before : new AccumulatedFileCoverage(before?.uri ?? vscode.Uri.file(e.path), e.summary, e.path);
         published.set(e.path, file);
         run.addCoverage(file);
+        this.shown = true; // From the first file on, something of ours is on screen.
       }
-      run.end();
-      this.shown = true;
-      this.published = published;
-      this.settled();
-    })();
+    } finally {
+      try {
+        run.end();
+      } catch {
+        // The controller was disposed meanwhile.
+      }
+    }
+    if (generation !== this.generation) return;
+    this.published = published;
+    this.settled();
   }
 
   /** Closes the native coverage display. */
   async close(): Promise<void> {
     this.cancelPending();
     this.generation++;
+    const wasShown = this.shown;
     this.shown = false;
     this.published = new Map();
     this.settled();
+    // Another extension's coverage may be on screen: close only what we published.
+    if (!wasShown) return;
     try {
       await vscode.commands.executeCommand('testing.coverage.close');
     } catch {
@@ -168,6 +183,11 @@ export class Publisher {
   dispose(): void {
     this.cancelPending();
     this.generation++;
+    this.disposed = true;
+    if (this.shown) {
+      this.shown = false;
+      Promise.resolve(vscode.commands.executeCommand('testing.coverage.close')).catch(() => undefined);
+    }
     this.published = new Map();
     this.subscription.dispose();
     this.settleListeners.clear();
@@ -185,9 +205,9 @@ export class Publisher {
   }
 
   private entryOf(path: string): MergedEntry | undefined {
-    const merged = this.store.merged();
-    if (this.index?.of !== merged) this.index = { of: merged, byPath: new Map(merged.map(e => [e.path, e])) };
-    return this.index.byPath.get(path);
+    // Built once per store version (the change handler drops it), not per file VS Code asks about.
+    this.index ??= new Map(this.store.merged().map(e => [e.path, e]));
+    return this.index.get(path);
   }
 
   private settled(): void {
