@@ -11,7 +11,8 @@ import { NotCoverageReportError, ReportParseError, type ParsedReport } from '../
 import { exec } from '../runner/exec';
 import type { Settings } from '../settings';
 import type { CoverageStore } from '../store';
-import { ownerOf, resultsRootOf, unownedKey } from '../watcher/attribution';
+import { applyReport } from '../watcher/apply';
+import { ownerOf, ownersOf, resultsRootOf, unownedKey } from '../watcher/attribution';
 import { ReportBatcher, type IngestResult } from '../watcher/batcher';
 import { ingestCoverageData } from '../watcher/coveragepy';
 import { anyOf, type FileEvent, type FileEventSource } from './fileEvents';
@@ -95,6 +96,7 @@ export class ReportWatcher {
       debounceMs: WATCH_DEBOUNCE_MS,
       retryMs: RETRY_MS,
       groupOf: path => this.groupOf(path),
+      ingestsMany: group => group.startsWith('dir:'),
       isSuppressed: group => deps.isSuppressed(group),
       ingest: (_group, path) => this.ingest(path),
       timers: { set: (fn, ms) => setTimeout(fn, ms), clear: h => clearTimeout(h as ReturnType<typeof setTimeout>) },
@@ -207,7 +209,7 @@ export class ReportWatcher {
 
   /** Same results root, same group: as the store key of an unowned report (`unownedKey`). */
   private groupOf(path: string): string {
-    return ownerOf(path, this.deps.projects())?.key ?? `dir:${resultsRootOf(path)}`;
+    return this.ownerKeyOf(path) ?? `dir:${resultsRootOf(path)}`;
   }
 
   private roots(): string[] {
@@ -215,7 +217,19 @@ export class ReportWatcher {
   }
 
   private keyOf(path: string, signature: string): string {
-    return ownerOf(path, this.deps.projects())?.key ?? unownedKey(path, signature);
+    return this.ownerKeyOf(path) ?? unownedKey(path, signature);
+  }
+
+  /**
+   * The owning project's key. When projects share a directory (Node and Python at one root) and the
+   * report's format does not tell them apart, each format gets its own key, so that their reports
+   * do not replace each other; the store unions them when it merges.
+   */
+  private ownerKeyOf(path: string): string | undefined {
+    const format = formatOf(path);
+    const owners = ownersOf(path, this.deps.projects(), nodePath, format);
+    if (owners.length === 0) return undefined;
+    return owners.length > 1 && format !== undefined ? `${owners[0].key}#${format}` : owners[0].key;
   }
 
   /** coverage.py data: converted with the interpreter of the owning project, or of the file's directory. */
@@ -224,7 +238,7 @@ export class ReportWatcher {
       isTrusted: () => this.deps.isTrusted(),
       interpreterFor: file => {
         const uri = vscode.Uri.file(file);
-        const dir = ownerOf(file, this.deps.projects())?.dir ?? nodePath.dirname(file);
+        const dir = ownerOf(file, this.deps.projects(), nodePath, 'coveragepy')?.dir ?? nodePath.dirname(file);
         return resolveInterpreter(dir, this.deps.settingsOf(uri), this.deps.fs, this.deps.pythonSelection(uri));
       },
       exec,
@@ -267,7 +281,7 @@ export class ReportWatcher {
       return 'drop';
     }
     if (this.disposed) return 'drop';
-    this.deps.store.replace(this.keyOf(path, report.signature), report.files);
+    if (!applyReport(this.deps.store, this.keyOf(path, report.signature), report, path, msg => this.deps.log(msg))) return 'ok';
     // Tells when a report was taken in (tests wait on this line too).
     this.deps.log(`Loaded ${path} (${report.files.length} file(s)).`);
     return 'ok';

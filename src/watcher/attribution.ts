@@ -1,5 +1,6 @@
 import nodePath from 'node:path';
 import type { Project } from '../adapters/types';
+import type { ReportFormat } from '../parsers/types';
 
 /** The parts of `node:path` used here; tests pass `path.win32` or `path.posix`. */
 export type PathApi = Pick<typeof nodePath, 'normalize' | 'dirname' | 'sep'>;
@@ -19,18 +20,39 @@ export function isWithin(dir: string, p: string, path: PathApi = nodePath): bool
   return c.startsWith(prefix);
 }
 
-/** The project whose directory is the nearest one above the report, if any. */
-export function ownerOf(reportPath: string, projects: readonly Project[], path: PathApi = nodePath): Project | undefined {
-  let best: Project | undefined;
+function matchesFormat(project: Project, format: ReportFormat): boolean {
+  if (format === 'istanbul' || format === 'lcov') return project.ecosystem === 'node';
+  if (format === 'coveragepy') return project.ecosystem === 'python';
+  return false;
+}
+
+/**
+ * The projects at the nearest directory above the report. Several only when projects share that
+ * directory; then those whose ecosystem produces the report's format are preferred, if any.
+ */
+export function ownersOf(reportPath: string, projects: readonly Project[], path: PathApi = nodePath, format?: ReportFormat): Project[] {
+  let best: Project[] = [];
   let bestLength = -1;
   for (const project of projects) {
+    if (!isWithin(project.dir, reportPath, path)) continue;
     const length = comparable(project.dir, path).length;
-    if (length > bestLength && isWithin(project.dir, reportPath, path)) {
-      best = project;
+    if (length > bestLength) {
+      best = [project];
       bestLength = length;
+    } else if (length === bestLength) {
+      best.push(project);
     }
   }
+  if (best.length > 1 && format !== undefined) {
+    const matching = best.filter(project => matchesFormat(project, format));
+    if (matching.length > 0) return matching;
+  }
   return best;
+}
+
+/** The project whose directory is the nearest one above the report, if any (the first of a tie). */
+export function ownerOf(reportPath: string, projects: readonly Project[], path: PathApi = nodePath, format?: ReportFormat): Project | undefined {
+  return ownersOf(reportPath, projects, path, format)[0];
 }
 
 /**

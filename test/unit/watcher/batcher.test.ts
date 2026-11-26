@@ -195,3 +195,36 @@ test('dispose cancels pending work and ignores later events', async () => {
   await timers.advance(5000);
   expect(calls).toEqual([]);
 });
+
+test('distinct reports of a group are all ingested when the group allows several', async () => {
+  const timers = fakeTimers();
+  const calls: string[] = [];
+  const batcher = new ReportBatcher({
+    debounceMs: 750, retryMs: 1000, groupOf: () => 'dir:/w/TestResults', isSuppressed: () => false,
+    ingestsMany: () => true,
+    ingest: async (_g, p) => { calls.push(p); return 'ok'; }, timers,
+  });
+  batcher.push('/w/TestResults/g1/coverage.cobertura.xml');
+  batcher.push('/w/TestResults/g2/coverage.cobertura.xml');
+  batcher.push('/w/TestResults/g1/coverage.cobertura.xml');
+  batcher.push('/w/TestResults/g2/coverage.cobertura.xml');
+  batcher.push('/w/TestResults/g2/lcov.info');
+  await timers.advance(750);
+  expect(calls).toHaveLength(2);
+  expect(calls[0]).toContain('/g1/');
+  expect(calls[1]).toContain('/g2/');
+});
+
+test('only the failed report of a group is retried', async () => {
+  const timers = fakeTimers();
+  const calls: string[] = [];
+  const batcher = new ReportBatcher({
+    debounceMs: 750, retryMs: 1000, groupOf: () => 'dir:/w', isSuppressed: () => false, ingestsMany: () => true,
+    ingest: async (_g, p) => { calls.push(p); return p.includes('g2') && calls.length < 3 ? 'retry' : 'ok'; }, timers,
+  });
+  batcher.push('/w/g1/a.xml');
+  batcher.push('/w/g2/a.xml');
+  await timers.advance(750);
+  await timers.advance(1000);
+  expect(calls).toEqual(['/w/g1/a.xml', '/w/g2/a.xml', '/w/g2/a.xml']);
+});

@@ -1,7 +1,7 @@
 import nodePath from 'node:path';
 import { expect, test } from 'vitest';
 import type { Project } from '../../../src/adapters/types';
-import { isWithin, ownerOf, resultsRootOf, unownedKey } from '../../../src/watcher/attribution';
+import { isWithin, ownerOf, ownersOf, resultsRootOf, unownedKey } from '../../../src/watcher/attribution';
 
 function p(dir: string): Project {
   return { key: `project:${dir}`, adapter: 'custom', ecosystem: 'custom', dir, name: nodePath.basename(dir), supportsPartial: false, meta: {} };
@@ -47,4 +47,22 @@ test('resultsRootOf strips the GUID folder under TestResults, otherwise uses the
 test('unownedKey combines results root and signature', () => {
   expect(unownedKey('/w/TestResults/g/coverage.cobertura.xml', 'A|B')).toBe('unowned:/w/TestResults#A|B');
   expect(unownedKey('/w/coverage/lcov.info', '')).toBe('unowned:/w/coverage#');
+});
+
+function pe(dir: string, ecosystem: Project['ecosystem'], file: string): Project {
+  return { ...p(dir), key: `project:${dir}/${file}`, ecosystem };
+}
+
+test('projects sharing a directory are told apart by the report format', () => {
+  const projects = [pe('/w', 'python', 'pyproject.toml'), pe('/w', 'node', 'package.json')];
+  expect(ownerOf('/w/coverage/lcov.info', projects, nodePath, 'lcov')!.ecosystem).toBe('node');
+  expect(ownerOf('/w/coverage/coverage-final.json', projects, nodePath, 'istanbul')!.ecosystem).toBe('node');
+  expect(ownerOf('/w/.coverage', projects, nodePath, 'coveragepy')!.ecosystem).toBe('python');
+});
+
+test('a tie that the format cannot resolve is reported by ownersOf', () => {
+  const projects = [pe('/w', 'python', 'pyproject.toml'), pe('/w', 'node', 'package.json')];
+  expect(ownersOf('/w/coverage.xml', projects, nodePath, 'cobertura')).toHaveLength(2);
+  expect(ownersOf('/w/coverage/lcov.info', projects, nodePath, 'lcov')).toHaveLength(1);
+  expect(ownersOf('/w/x/lcov.info', [p('/w/a')], nodePath, 'lcov')).toHaveLength(0);
 });

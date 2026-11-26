@@ -3,6 +3,7 @@ import { withPythonFallback } from '../adapters/python';
 import type { CommandSpec } from '../adapters/types';
 import type { FileCoverageData } from '../model';
 import type { ParsedReport } from '../parsers/types';
+import { applyReport } from './apply';
 import type { IngestResult, Timers } from './batcher';
 
 /** How long a conversion may run before it is killed. */
@@ -123,7 +124,7 @@ export async function ingestCoverageData(coverageFile: string, deps: CoverageDat
       return 'drop';
     }
     if (deps.signal.aborted) return 'drop';
-    deps.store.replace(deps.keyOf(coverageFile, report.signature), report.files);
+    applyReport(deps.store, deps.keyOf(coverageFile, report.signature), report, coverageFile, deps.log);
     return 'ok';
   } catch (e) {
     if (!deps.signal.aborted) deps.log(`Could not convert the coverage.py data file ${coverageFile}: ${messageOf(e)}`);

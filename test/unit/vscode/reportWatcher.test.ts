@@ -184,13 +184,46 @@ test('a path outside every workspace folder, or excluded, is ignored', async () 
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test('reports of two result folders under one TestResults form one group and one store key', async () => {
+test('reports of two result folders under one TestResults with one signature share one store key', async () => {
   parse.mockResolvedValue({ ...report(n('/w/one/api/A.cs')), signature: 'Api' });
   fire(n('/w/one/api/TestResults/1111/coverage.cobertura.xml'));
   fire(n('/w/one/api/TestResults/2222/coverage.cobertura.xml'));
   await vi.advanceTimersByTimeAsync(750);
-  expect(parse.mock.calls.map(c => c[0])).toEqual([n('/w/one/api/TestResults/2222/coverage.cobertura.xml')]);
+  expect(parse.mock.calls.map(c => c[0])).toEqual([
+    n('/w/one/api/TestResults/1111/coverage.cobertura.xml'), n('/w/one/api/TestResults/2222/coverage.cobertura.xml')]);
   expect(store.keys()).toEqual([`unowned:${n(n('/w/one/api/TestResults'))}#Api`]);
+});
+
+test('two unowned projects writing into one TestResults within one window are both ingested', async () => {
+  parse.mockImplementation(async p => ({ ...report(n(p.includes('1111') ? '/w/one/api/A.cs' : '/w/one/web/B.cs')), signature: p.includes('1111') ? 'Api' : 'Web' }));
+  fire(n('/w/one/TestResults/1111/coverage.cobertura.xml'));
+  fire(n('/w/one/TestResults/2222/coverage.cobertura.xml'));
+  await vi.advanceTimersByTimeAsync(750);
+  expect(store.keys().sort()).toEqual([`unowned:${n('/w/one/TestResults')}#Api`, `unowned:${n('/w/one/TestResults')}#Web`]);
+});
+
+test('a report whose paths are all unresolvable keeps the earlier coverage and says why', async () => {
+  fire(n('/w/one/coverage/lcov.info'));
+  await vi.advanceTimersByTimeAsync(750);
+  expect(store.merged()).toHaveLength(1);
+  parse.mockResolvedValue({ files: [], signature: '', dropped: 4 });
+  fire(n('/w/one/coverage/lcov.info'));
+  await vi.advanceTimersByTimeAsync(750);
+  expect(store.merged()).toHaveLength(1);
+  expect(logs.filter(l => l.includes('4 file(s)'))).toHaveLength(1);
+});
+
+test('Node and Python projects at one root keep separate coverage for an ambiguous report format', async () => {
+  const mk = (file: string, ecosystem: Project['ecosystem']): Project => ({
+    key: `project:${n('/w/one/' + file)}`, adapter: 'custom', ecosystem, dir: n('/w/one'), definingFile: n('/w/one/' + file), name: file, supportsPartial: false, meta: {},
+  });
+  projects = [mk('pyproject.toml', 'python'), mk('package.json', 'node')];
+  fire(n('/w/one/coverage/lcov.info'));
+  await vi.advanceTimersByTimeAsync(750);
+  expect(store.keys()).toEqual([`project:${n('/w/one/package.json')}`]);
+  fire(n('/w/one/coverage.xml'));
+  await vi.advanceTimersByTimeAsync(750);
+  expect(store.keys()).toHaveLength(2);
 });
 
 test('a report inside a discovered project is stored under its key, and ignored while the project is suppressed', async () => {

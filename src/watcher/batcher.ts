@@ -13,6 +13,8 @@ export interface BatcherOptions {
   /** Delay before the one new attempt at a report that could not be read. */
   retryMs: number;
   groupOf(path: string): string;
+  /** Whether distinct reports (in different directories) of the group are all ingested; otherwise one per window. */
+  ingestsMany?(group: string): boolean;
   isSuppressed(group: string): boolean;
   ingest(group: string, reportPath: string): Promise<IngestResult>;
   timers: Timers;
@@ -27,7 +29,7 @@ interface Group {
   retry?: unknown;
   running: boolean;
   /** A flush that happened while an ingestion was running; it starts when that one ends. */
-  queued?: { path: string; generation: number };
+  queued?: { paths: string[]; generation: number };
 }
 
 function rank(path: string): number {
@@ -36,11 +38,22 @@ function rank(path: string): number {
   return i < 0 ? FORMAT_PRIORITY.length : i;
 }
 
-/** The report to ingest: the highest-priority format, and among equals the most recently pushed. */
-function pick(paths: readonly string[]): string {
-  let best = paths[0];
-  for (const p of paths) if (rank(p) <= rank(best)) best = p;
-  return best;
+function dirOf(path: string): string {
+  return path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+}
+
+/** The reports to ingest: the highest-priority format (the most recently pushed among equals), per directory when `many`, else once. */
+function pick(paths: readonly string[], many: boolean): string[] {
+  const best = new Map<string, string>();
+  for (const p of paths) {
+    const dir = many ? dirOf(p) : '';
+    const current = best.get(dir);
+    if (current === undefined || rank(p) <= rank(current)) {
+      best.delete(dir); // keeps the map ordered by the last push
+      best.set(dir, p);
+    }
+  }
+  return [...best.values()];
 }
 
 /**
@@ -85,37 +98,47 @@ export class ReportBatcher {
   }
 
   private flush(key: string, group: Group): void {
-    const path = pick(group.paths);
+    const paths = pick(group.paths, this.o.ingestsMany?.(key) ?? false);
     group.paths = [];
     if (this.o.isSuppressed(key)) {
       this.forgetIfIdle(key, group);
       return;
     }
-    if (group.running) group.queued = { path, generation: group.generation };
-    else this.start(key, group, path, group.generation, true);
+    if (group.running) group.queued = { paths, generation: group.generation };
+    else this.start(key, group, paths, group.generation, true);
   }
 
-  private start(key: string, group: Group, path: string, generation: number, mayRetry: boolean): void {
+  private start(key: string, group: Group, paths: string[], generation: number, mayRetry: boolean): void {
     group.running = true;
-    void this.ingest(key, path).then(result => {
+    void this.ingestAll(key, paths).then(retries => {
       group.running = false;
       if (this.disposed) return;
       const queued = group.queued;
       if (queued) {
         group.queued = undefined;
-        this.start(key, group, queued.path, queued.generation, true);
+        this.start(key, group, queued.paths, queued.generation, true);
         return;
       }
-      if (result === 'retry' && mayRetry && generation === group.generation && group.debounce === undefined) {
+      if (retries.length > 0 && mayRetry && generation === group.generation && group.debounce === undefined) {
         group.retry = this.o.timers.set(() => {
           group.retry = undefined;
           if (this.o.isSuppressed(key)) this.forgetIfIdle(key, group);
-          else this.start(key, group, path, generation, false);
+          else this.start(key, group, retries, generation, false);
         }, this.o.retryMs);
         return;
       }
       this.forgetIfIdle(key, group);
     });
+  }
+
+  /** Ingests the reports one after the other; returns those worth another attempt. */
+  private async ingestAll(key: string, paths: readonly string[]): Promise<string[]> {
+    const retries: string[] = [];
+    for (const path of paths) {
+      if (this.disposed) break;
+      if ((await this.ingest(key, path)) === 'retry') retries.push(path);
+    }
+    return retries;
   }
 
   private async ingest(key: string, path: string): Promise<IngestResult> {
