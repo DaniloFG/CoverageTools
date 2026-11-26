@@ -32,7 +32,8 @@ export interface ExtensionApi {
 const timers = { set: (fn: () => void, ms: number) => setTimeout(fn, ms), clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
 
 export function activate(context: vscode.ExtensionContext): ExtensionApi {
-  const store = new CoverageStore();
+  // Listener errors are logged; `log` is defined below and only called later, so the output channel is not created here.
+  const store = new CoverageStore(m => log(m));
   const publisher = new Publisher(store);
   const queue = new RunQueue();
   const statusBar = new StatusBar(store, publisher, queue);
