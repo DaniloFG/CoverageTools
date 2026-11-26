@@ -34,7 +34,7 @@ export interface CoverageDataDeps {
   removeDir(dir: string): Promise<void>;
   /** Removes a directory synchronously, never throwing: used on dispose, as the host may exit next. */
   removeDirNow(dir: string): void;
-  store: { replace(key: string, files: readonly FileCoverageData[]): void };
+  store: { replace(key: string, files: readonly FileCoverageData[]): void; replaceInSlices?(key: string, files: readonly FileCoverageData[]): Promise<void> };
   /** The store key of the data file's coverage: the owning project's key, else an `unowned:` key. */
   keyOf(coverageFile: string, signature: string): string;
   roots(): readonly string[];
@@ -124,7 +124,7 @@ export async function ingestCoverageData(coverageFile: string, deps: CoverageDat
       return 'drop';
     }
     if (deps.signal.aborted) return 'drop';
-    applyReport(deps.store, deps.keyOf(coverageFile, report.signature), report, coverageFile, deps.log);
+    await applyReport(deps.store, deps.keyOf(coverageFile, report.signature), report, coverageFile, deps.log);
     return 'ok';
   } catch (e) {
     if (!deps.signal.aborted) deps.log(`Could not convert the coverage.py data file ${coverageFile}: ${messageOf(e)}`);

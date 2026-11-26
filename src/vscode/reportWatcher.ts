@@ -281,7 +281,8 @@ export class ReportWatcher {
       return 'drop';
     }
     if (this.disposed) return 'drop';
-    if (!applyReport(this.deps.store, this.keyOf(path, report.signature), report, path, msg => this.deps.log(msg))) return 'ok';
+    const applied = await applyReport(this.deps.store, this.keyOf(path, report.signature), report, path, msg => this.deps.log(msg));
+    if (!applied || this.disposed) return 'ok';
     // Tells when a report was taken in (tests wait on this line too).
     this.deps.log(`Loaded ${path} (${report.files.length} file(s)).`);
     return 'ok';

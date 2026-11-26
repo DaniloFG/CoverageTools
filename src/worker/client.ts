@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import type { FileCoverageData } from '../model';
 import type { ParsedReport } from '../parsers/types';
-import { errorOf, fromWireFile, type ParseRequest, type ParseResponse } from './protocol';
+import { errorOf, fromWireFile, type Ack, type ParseRequest, type ParseResponse } from './protocol';
 
 /** A thrown value as text; a worker can throw anything, not only an Error. */
 function describe(error: unknown): string {
@@ -86,6 +86,15 @@ export class ParserClient {
     if (entry === undefined) return; // A request already rejected (or disposed): the rest of its answer is dropped.
     if (response.ok && response.part === 'files') {
       for (const f of response.files) entry.files.push(fromWireFile(f));
+      // The next message on a later turn: the main thread takes in one chunk per turn, not all at once.
+      setImmediate(() => {
+        if (this.pending.get(response.id) !== entry) return; // Rejected meanwhile.
+        try {
+          entry.worker.postMessage({ id: response.id, ack: true } satisfies Ack);
+        } catch {
+          // The worker is gone; its death rejects the request.
+        }
+      });
       return;
     }
     this.pending.delete(response.id);

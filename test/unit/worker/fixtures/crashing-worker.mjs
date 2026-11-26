@@ -6,6 +6,7 @@ let crashed = false;
 const on = parentPort.on.bind(parentPort);
 parentPort.on = (event, listener) => on(event, event !== 'message' ? listener : (request) => {
   if (crashed) return;
+  if (request.ack) return listener(request);
   if (request.reportPath.endsWith('crash')) {
     crashed = true;
     throw new Error('simulated worker crash');

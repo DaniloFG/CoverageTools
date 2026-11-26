@@ -10,6 +10,7 @@ export interface MergedEntry { path: string; parts: readonly FileCoverageData[];
 export class CoverageStore {
   private readonly projects = new Map<string, readonly FileCoverageData[]>();
   private readonly listeners = new Set<() => void>();
+  private readonly replacements = new Map<string, number>();
   private readonly reported = new Set<() => void>();
   private mergedCache: readonly MergedEntry[] | undefined;
   private totalsCache: Count | undefined;
@@ -26,6 +27,26 @@ export class CoverageStore {
     if (current !== undefined && current.length === 0 && files.length === 0) return;
     this.projects.set(key, unionFileLists(files, []));
     this.changed();
+  }
+
+  /**
+   * `replace` for large reports: the files are collected in slices that give the event loop control
+   * back in between, then the project changes once. A later replacement of the same project that
+   * started meanwhile wins; this one then changes nothing.
+   */
+  async replaceInSlices(key: string, files: readonly FileCoverageData[], options?: SliceOptions): Promise<void> {
+    const ticket = (this.replacements.get(key) ?? 0) + 1;
+    this.replacements.set(key, ticket);
+    try {
+      const next = await unionFileListsInSlices(files, [], options);
+      if (this.replacements.get(key) !== ticket) return;
+      const current = this.projects.get(key);
+      if (current !== undefined && current.length === 0 && next.length === 0) return;
+      this.projects.set(key, next);
+      this.changed();
+    } finally {
+      if (this.replacements.get(key) === ticket) this.replacements.delete(key);
+    }
   }
 
   /** Adds coverage to a project, summing it with what the project already holds. */

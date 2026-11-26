@@ -7,6 +7,12 @@ export interface ParseRequest {
   roots: readonly string[];
 }
 
+/** The client's go-ahead for the next message of request `id`, sent once it took in the previous one. */
+export interface Ack {
+  id: number;
+  ack: true;
+}
+
 /** A file as it crosses the thread boundary: each array's buffer is transferred, not copied. */
 export interface WireFile {
   path: string;
@@ -26,9 +32,11 @@ export type ErrorKind = 'parse' | 'not-coverage' | 'io';
 
 /**
  * The answer to one request, in several messages so that the main thread never deserializes a whole
- * large report at once (each message is taken in on its own turn of the event loop): `files`
- * messages with at most CHUNK_FILES files each, in report order, then one `end`; or, at any point
- * instead of what is left, one error.
+ * large report at once: `files` messages with at most CHUNK_FILES files each, in report order, then
+ * one `end`; or, at any point instead of what is left, one error. The worker sends the first
+ * message at once and each further one only when the client acknowledges (`Ack`) the previous one,
+ * which it does on a later turn of its event loop: a port delivers messages that are already
+ * queued in one turn, so without the acknowledgements all chunks would be taken in as one block.
  */
 export type ParseResponse =
   | { id: number; ok: true; part: 'files'; files: WireFile[] }

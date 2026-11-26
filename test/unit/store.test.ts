@@ -163,3 +163,18 @@ test('a throwing listener is reported once, and the others still run', () => {
   expect(messages).toHaveLength(1);
   expect(messages[0]).toContain('boom');
 });
+
+test('replaceInSlices gives the event loop control back, then replaces like replace; the latest call wins', async () => {
+  const store = new CoverageStore();
+  store.replace('a', [file('/old.ts', [[1, 1]])]);
+  const many = Array.from({ length: 2000 }, (_, i) => file(`/w/f${i}.ts`, [[1, 1]]));
+  let yields = 0;
+  const options = { sliceMs: 0, yieldToLoop: async () => { yields++; await new Promise(r => setImmediate(r)); } };
+  const first = store.replaceInSlices('a', many, options);
+  const second = store.replaceInSlices('a', [file('/new.ts', [[1, 1]])], options);
+  await Promise.all([first, second]);
+  expect(yields).toBeGreaterThan(0);
+  expect(store.merged().map(e => e.path)).toEqual(['/new.ts']);
+  await store.replaceInSlices('a', many, options);
+  expect(store.merged()).toHaveLength(2000);
+});

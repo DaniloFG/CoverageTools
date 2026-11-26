@@ -59,22 +59,22 @@ test('ingesting 5,000 files never blocks the main thread for 50 ms (watcher → 
     dispose();
   });
   const s = stats(blocks);
-  report('max main-thread block, 5,000-file ingest (best of 3)', s, 'ms', BLOCK_LIMIT_MS);
-  expect(s.min).toBeLessThan(BLOCK_LIMIT_MS);
+  report('max main-thread block, 5,000-file ingest (median of 3)', s, 'ms', BLOCK_LIMIT_MS);
+  expect(s.median).toBeLessThan(BLOCK_LIMIT_MS);
 }, 300_000);
 
 test('ingesting 5,000 files never blocks the main thread for 50 ms (parse → store.replace → merged → totals)', async () => {
   const blocks = await maxBlocks(async () => {
     const files = await parse(fullReport);
     const store = new CoverageStore();
-    store.replace('project:a', files);
+    await store.replaceInSlices('project:a', files);
     await new Promise(resolve => setImmediate(resolve));
     expect(store.merged()).toHaveLength(FILES);
     expect(store.totals().total).toBe(FILES * 200);
   });
   const s = stats(blocks);
-  report('max main-thread block, parse + replace + merged (best of 3)', s, 'ms', BLOCK_LIMIT_MS);
-  expect(s.min).toBeLessThan(BLOCK_LIMIT_MS);
+  report('max main-thread block, parse + replace + merged (median of 3)', s, 'ms', BLOCK_LIMIT_MS);
+  expect(s.median).toBeLessThan(BLOCK_LIMIT_MS);
 }, 300_000);
 
 test('a partial-run union over 5,000 files stays under the same 50 ms bound, and so do merged() and totals() after it', async () => {
@@ -94,8 +94,8 @@ test('a partial-run union over 5,000 files stays under the same 50 ms bound, and
     expect(totals.covered).toBeGreaterThan(0);
   });
   const s = stats(blocks);
-  report('max main-thread block, partial-run union + merged + totals (best of 3)', s, 'ms', BLOCK_LIMIT_MS);
-  expect(s.min).toBeLessThan(BLOCK_LIMIT_MS);
+  report('max main-thread block, partial-run union + merged + totals (median of 3)', s, 'ms', BLOCK_LIMIT_MS);
+  expect(s.median).toBeLessThan(BLOCK_LIMIT_MS);
 }, 300_000);
 
 /** One sample of the memory the extension keeps for the 5,000-file report, at rest after publishing. */

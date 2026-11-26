@@ -177,6 +177,14 @@ test('a report sent in several messages resolves once, with every file in order'
   expect(client.running).toBe(false);
 });
 
+test('the client asks for each next message only after taking the previous one in, so that its work is spread over turns', async () => {
+  client.dispose();
+  client = new ParserClient(SCRIPTED_WORKER);
+  const r = await client.parse('paced:5', []);
+  expect(r.files).toHaveLength(5);
+  expect(r.signature).toBe('paced');
+});
+
 test('the messages of two requests in flight are kept apart', async () => {
   client.dispose();
   client = new ParserClient(SCRIPTED_WORKER);
