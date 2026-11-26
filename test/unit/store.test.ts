@@ -150,3 +150,16 @@ test('unionInSlices starts again from what the project holds when it changed mea
   });
   expect(lines(store.merged()[0].parts[0])).toEqual([[1, 12]]);
 });
+
+test('a throwing listener is reported once, and the others still run', () => {
+  const messages: string[] = [];
+  const store = new CoverageStore(m => messages.push(m));
+  let ran = 0;
+  store.onDidChange(() => { throw new Error('boom'); });
+  store.onDidChange(() => { ran++; });
+  store.replace('a', [file('/a.ts', [[1, 1]])]);
+  store.replace('b', [file('/b.ts', [[1, 1]])]);
+  expect(ran).toBe(2);
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toContain('boom');
+});

@@ -57,6 +57,18 @@ test('loadReport strips a UTF-8 BOM', () => {
   expect(report.signature).not.toBe('');
 });
 
+test('loadReport decodes UTF-16 reports with a byte order mark', () => {
+  const xml = '<?xml version="1.0"?>\n<coverage><sources><source>' + root +
+    '</source></sources><packages><package name="p"><classes><class filename="src/a.js"><lines>' +
+    '<line number="1" hits="2"/></lines></class></classes></package></packages></coverage>';
+  const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]);
+  const be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(xml, 'utf16le').swap16()]);
+  for (const bytes of [le, be]) {
+    writeFileSync(path.join(root, 'coverage.xml'), bytes);
+    expect(loadReport(path.join(root, 'coverage.xml'), [root]).files.map(f => f.path)).toEqual([path.join(root, 'src/a.js')]);
+  }
+});
+
 test('loadReport on a .coverage file throws ReportParseError: conversion happens before loading', () => {
   expect(() => loadReport(write('.coverage', 'SQLite format 3\0'), [root])).toThrow(ReportParseError);
 });

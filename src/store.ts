@@ -10,11 +10,15 @@ export interface MergedEntry { path: string; parts: readonly FileCoverageData[];
 export class CoverageStore {
   private readonly projects = new Map<string, readonly FileCoverageData[]>();
   private readonly listeners = new Set<() => void>();
+  private readonly reported = new Set<() => void>();
   private mergedCache: readonly MergedEntry[] | undefined;
   private totalsCache: Count | undefined;
   private readonly projectTotalsCache = new Map<string, Count>();
   private summaryCache: FileSummary | undefined;
   private readonly projectSummaryCache = new Map<string, FileSummary>();
+
+  /** `onError` receives a message for the first error each listener throws. */
+  constructor(private readonly onError?: (message: string) => void) {}
 
   /** Replaces everything a project holds. An empty list keeps the project, with no files. */
   replace(key: string, files: readonly FileCoverageData[]): void {
@@ -135,7 +139,7 @@ export class CoverageStore {
   onDidChange(listener: () => void): { dispose(): void } {
     const wrapped = (): void => listener();
     this.listeners.add(wrapped);
-    return { dispose: () => { this.listeners.delete(wrapped); } };
+    return { dispose: () => { this.listeners.delete(wrapped); this.reported.delete(wrapped); } };
   }
 
   private changed(): void {
@@ -147,8 +151,12 @@ export class CoverageStore {
     for (const listener of [...this.listeners]) {
       try {
         listener();
-      } catch {
-        // A failing listener must not stop the others or the mutation that triggered it.
+      } catch (error) {
+        // A failing listener must not stop the others or the mutation that triggered it; it is reported once.
+        if (!this.reported.has(listener)) {
+          this.reported.add(listener);
+          this.onError?.(`A coverage listener failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+        }
       }
     }
   }

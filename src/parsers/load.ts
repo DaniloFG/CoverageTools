@@ -90,9 +90,16 @@ function checkLcov(text: string): void {
   }
 }
 
+/** UTF-8, or UTF-16 when the file starts with a byte order mark (PowerShell redirection writes it). */
+function decode(bytes: Buffer): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString('utf16le', 2);
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return Buffer.from(bytes.subarray(2)).swap16().toString('utf16le');
+  return bytes.toString('utf8');
+}
+
 function readReport(reportPath: string): string {
   try {
-    return readFileSync(reportPath, 'utf8');
+    return decode(readFileSync(reportPath));
   } catch (e) {
     // The watcher saw the file, but it is gone: tools often replace a report by deleting and rewriting it,
     // so this is treated like a report that is still being written and is retried.
