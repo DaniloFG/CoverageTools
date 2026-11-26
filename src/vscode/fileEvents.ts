@@ -86,6 +86,8 @@ export class WorkspaceFileEvents implements FileEventSource {
   private subscriptions: vscode.Disposable[] = [];
   /** Innermost first, so that the first match is the innermost folder. */
   private folders: Folder[] = [];
+  /** The last event of a path inside nested folders, to drop the copy the other watcher delivers. */
+  private lastNested = '';
   private started = false;
   private disposed = false;
 
@@ -161,7 +163,19 @@ export class WorkspaceFileEvents implements FileEventSource {
     if (folder === undefined) return;
     const rel = path.length < folder.prefix.length ? '' : toPosix(path.slice(folder.prefix.length));
     if (inGitDir(rel) || (folder.exclude !== undefined && folder.exclude.test(rel))) return;
+    // Nested workspace folders have overlapping watchers: the same event arrives once per watcher.
+    if (this.folders.length > 1 && this.folders.some(f => f !== folder && compare.startsWith(f.compare))) {
+      const id = `${kind}\0${path}`;
+      if (id === this.lastNested) return;
+      this.lastNested = id;
+    }
     const event = new Event(kind, uri, path, folder.path, rel, rel.slice(rel.lastIndexOf('/') + 1));
-    for (const listener of this.listeners) listener(event);
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // One failing consumer must not keep the others from the event.
+      }
+    }
   }
 }

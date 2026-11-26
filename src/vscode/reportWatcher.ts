@@ -21,8 +21,23 @@ import { anyOf, type FileEvent, type FileEventSource } from './fileEvents';
 const WATCH_DEBOUNCE_MS = 750;
 /** Delay before the one new attempt at a report that could not be read (it may still be being written). */
 const RETRY_MS = 1_000;
-/** At most this many reports are searched for in one created folder. */
-const MAX_FOLDER_RESULTS = 50;
+/** At most this many report files are looked at in one created folder, then only the recent ones are kept. */
+const MAX_FOLDER_RESULTS = 200;
+/** At most this many created paths wait for the next scan; further ones of the same burst are not looked at. */
+/** At most this many recent reports of one created folder are loaded. */
+const MAX_FOLDER_REPORTS = 50;
+const MAX_PENDING_DIRS = 1_000;
+/** Extensions of files that are certainly not folders: a created `a.ts` costs no stat, a created `my.results` does. */
+const FILE_EXTENSIONS = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'pyc', 'cs', 'csproj', 'sln', 'java', 'kt', 'go', 'rs', 'rb', 'php', 'c', 'cc', 'cpp', 'h', 'hpp',
+  'md', 'txt', 'log', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'lock', 'html', 'css', 'scss', 'map', 'svg', 'png', 'jpg', 'gif', 'zip', 'tgz', 'gz',
+  'sh', 'ps1', 'bat', 'dll', 'exe', 'pdb', 'so', 'o', 'class', 'jar', 'tmp', 'swp', 'bak', 'orig', 'json', 'xml', 'info', 'lcov', 'sqlite', 'db',
+]);
+
+function mayBeFolder(name: string): boolean {
+  const dot = name.lastIndexOf('.');
+  return dot < 0 || !FILE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
+}
 /** At most this many created folders are searched per quiet period (the outermost ones). */
 const MAX_FOLDER_SCANS = 200;
 /**
@@ -144,11 +159,12 @@ export class ReportWatcher {
     const matcher = this.matchers.get(e.folder);
     if (matcher === undefined || matcher.globs === undefined) return;
     if (matcher.globs.test(e.rel)) this.batcher.push(e.path);
-    // A name without an extension may be a folder created with reports in it (`coverage`, a TestResults run).
-    else if (e.kind === 'create' && e.rel !== '' && !e.name.includes('.')) this.queueCreated(e);
+    // A name without a file extension may be a folder created with reports in it (`coverage`, a TestResults run).
+    else if (e.kind === 'create' && e.rel !== '' && mayBeFolder(e.name)) this.queueCreated(e);
   }
 
   private queueCreated(e: FileEvent): void {
+    if (this.createdDirs.size >= MAX_PENDING_DIRS && !this.createdDirs.has(e.path)) return; // The earlier (outer) ones are kept.
     this.createdDirs.set(e.path, e);
     if (this.scanTimer !== undefined) clearTimeout(this.scanTimer);
     this.scanTimer = setTimeout(() => {
@@ -194,7 +210,7 @@ export class ReportWatcher {
         const relative = posixRelative(folder, uri.fsPath);
         if (!matcher.globs.test(relative) || matcher.exclude.some(re => re.test(relative))) continue;
         const { mtime } = await vscode.workspace.fs.stat(uri);
-        if (now - mtime <= RECENT_REPORT_MS) found.push(uri.fsPath);
+        if (now - mtime <= RECENT_REPORT_MS && found.length < MAX_FOLDER_REPORTS) found.push(uri.fsPath);
       }
     } catch {
       return; // Gone again, or not readable.

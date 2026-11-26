@@ -41,7 +41,7 @@ vi.mock('vscode', () => {
       },
       findFiles: async (pattern: { base: FakeUri; pattern: string }, _exclude: unknown, maxResults?: number) => {
         h.finds.push({ base: pattern.base.fsPath, pattern: pattern.pattern, maxResults });
-        return (h.dirs.get(pattern.base.fsPath) ?? []).map(p => ({ scheme: 'file', fsPath: p }));
+        return (h.dirs.get(pattern.base.fsPath) ?? []).slice(0, maxResults).map(p => ({ scheme: 'file', fsPath: p }));
       },
       onDidChangeConfiguration: () => disposable,
       onDidChangeWorkspaceFolders: () => disposable,
@@ -260,7 +260,7 @@ test('a folder created with reports already inside is searched for report names 
   expect(logs).toEqual([`Loaded ${n('/w/one/coverage/lcov.info')} (1 file(s)).`]);
   expect(h.finds).toHaveLength(1);
   expect(h.finds[0].base).toBe(n('/w/one/coverage'));
-  expect(h.finds[0].maxResults).toBe(50);
+  expect(h.finds[0].maxResults).toBe(200);
   expect(h.finds[0].pattern).not.toContain('**/*}');
   expect(h.finds[0].pattern).toContain('lcov.info');
 });
@@ -294,4 +294,27 @@ test('a folder created in an excluded path or under .git is neither stat\'ed nor
   expect(h.finds).toEqual([]);
   expect(parse).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
+});
+
+test('a fresh report is found among many old ones: the recency filter comes before the cap', async () => {
+  const old = Array.from({ length: 60 }, (_, i) => written(n(`/w/one/cov/old${i}/coverage/lcov.info`), 5 * 60_000));
+  h.dirs.set(n('/w/one/cov'), [...old, written(n('/w/one/cov/fresh/coverage/lcov.info'))]);
+  fire(n('/w/one/cov'));
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(parse.mock.calls.map(c => c[0])).toEqual([n('/w/one/cov/fresh/coverage/lcov.info')]);
+});
+
+test('a created folder whose name has a dot is searched like any other', async () => {
+  h.dirs.set(n('/w/one/my.results'), [written(n('/w/one/my.results/coverage/lcov.info'))]);
+  fire(n('/w/one/my.results'));
+  fire(n('/w/one/src/a.ts'));
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect(h.finds.map(f => f.base)).toEqual([n('/w/one/my.results')]);
+  expect(parse).toHaveBeenCalledTimes(1);
+});
+
+test('a long stream of created paths is bounded: at most 200 are looked at', async () => {
+  for (let i = 0; i < 3_000; i++) fire(n(`/w/one/gen/d${i}`));
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(h.stats.length).toBeLessThanOrEqual(200);
 });

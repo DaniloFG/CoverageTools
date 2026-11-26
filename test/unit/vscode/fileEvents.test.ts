@@ -71,11 +71,10 @@ test('each event carries the innermost folder, the relative path and the name, c
   const second: FileEvent[] = [];
   events.onDidFileEvent(e => second.push(e));
   fire('change', n('/w/src/a.ts'));
-  // The outer folder's watcher sees inner paths too, as VS Code's does: one event each.
+  // The outer folder's watcher sees inner paths too, as VS Code's does: still one event.
   fire('create', n('/w/inner/lib/b.py'));
   expect(seen.map(e => [e.kind, e.folder, e.rel, e.name])).toEqual([
     ['change', n('/w'), 'src/a.ts', 'a.ts'],
-    ['create', n('/w/inner'), 'lib/b.py', 'b.py'],
     ['create', n('/w/inner'), 'lib/b.py', 'b.py'],
   ]);
   expect(second[0]).toBe(seen[0]);
@@ -101,4 +100,14 @@ test('the excludes follow the setting', () => {
 test('inGitDir matches .git segments only', () => {
   expect(['.git', '.git/x', 'a/.git', 'a/.git/b'].map(inGitDir)).toEqual([true, true, true, true]);
   expect(['.github/x', 'a.git', 'x/.gitignore', 'git/x'].map(inGitDir)).toEqual([false, false, false, false]);
+});
+
+test('a listener that throws does not keep the others from the event', () => {
+  events.start();
+  events.onDidFileEvent(() => { throw new Error('boom'); });
+  const after: FileEvent[] = [];
+  events.onDidFileEvent(e => after.push(e));
+  fire('change', n('/w/src/a.ts'));
+  expect(seen).toHaveLength(1);
+  expect(after).toHaveLength(1);
 });
