@@ -50,6 +50,32 @@ function watches(pkg: PackageJson): boolean {
     || (words.includes('-w') && words.some(w => ['mocha', '_mocha'].includes(toolName(w)))));
 }
 
+/**
+ * Tools that watch unless told otherwise, with the flag that makes them run once. Unlike `--watch`
+ * above, nothing in the script says so.
+ */
+const WATCHING_BY_DEFAULT: ReadonlyArray<{ tool: string; subcommand?: string; flag: string; off: readonly string[] }> = [
+  { tool: 'karma', flag: '--single-run', off: ['--single-run', '--singleRun', '--no-auto-watch', '--auto-watch=false'] },
+  { tool: 'ng', subcommand: 'test', flag: '--watch=false', off: ['--watch=false', '--no-watch'] },
+];
+
+/**
+ * What a script that watches by default needs: nothing (`'ok'`), the flag that turns watching off (it
+ * reaches the script's last command, so the tool must be that one), or `'watch'` when it cannot be added.
+ */
+function watchingByDefault(pkg: PackageJson): { flag: string } | 'watch' | 'ok' {
+  const commands = scriptCommandWords(pkg);
+  for (const [i, words] of commands.entries()) {
+    for (const entry of WATCHING_BY_DEFAULT) {
+      const at = words.findIndex(w => toolName(w) === entry.tool);
+      if (at < 0 || (entry.subcommand !== undefined && words[at + 1] !== entry.subcommand)) continue;
+      if (words.some(w => entry.off.includes(w))) continue;
+      return i === commands.length - 1 ? { flag: entry.flag } : 'watch';
+    }
+  }
+  return 'ok';
+}
+
 /** The c8 entry point shipped inside the extension. */
 export function c8BinPath(extensionRoot: string): string {
   return path.join(extensionRoot, 'node_modules', 'c8', 'bin', 'c8.js');
@@ -101,8 +127,11 @@ export const nodeGenericAdapter: Adapter = {
   async plan(project, _target, ctx) {
     const pkg = (await readPackageJson(path.join(project.dir, 'package.json'), ctx.fs)) ?? {};
     const pm = await packageManagerOf(project.dir, ctx.fs, workspaceFolderOf(project));
-    const extra = ctx.settings.nodeExtraArgs;
+    let extra = ctx.settings.nodeExtraArgs;
     if (hasTestScript(pkg) && watches(pkg)) return { steps: [], reportSearchDir: ctx.tmpDir, hint: WATCH_HINT };
+    const implicit = hasTestScript(pkg) ? watchingByDefault(pkg) : 'ok';
+    if (implicit === 'watch') return { steps: [], reportSearchDir: ctx.tmpDir, hint: WATCH_HINT };
+    if (implicit !== 'ok') extra = [...extra, implicit.flag];
     if (hasTestScript(pkg) && scriptInvokes(pkg, OWN_COVERAGE_TOOLS)) {
       // Wrapping nyc or c8 in c8 again would measure the wrong process; the script's own report is used.
       const { command, args } = scriptCommand(pm, 'test', extra);

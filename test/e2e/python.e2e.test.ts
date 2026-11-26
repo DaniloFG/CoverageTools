@@ -119,9 +119,10 @@ describe('python-pytest-plain (pytest + coverage, no pytest-cov)', () => {
 
   test('pytest with only coverage.py: coverage run -m pytest, then coverage xml; partial runs accumulate', async () => {
     const commands = await s.run({ kind: 'full' });
-    expect(commands).toHaveLength(2);
+    expect(commands).toHaveLength(3);
     expect(commands[0]).toMatch(/ -m coverage run --data-file=\S+[\\/]\.coverage -m pytest -p no:cacheprovider$/);
-    expect(commands[1]).toMatch(/ -m coverage xml --data-file=\S+[\\/]\.coverage -o \S+[\\/]coverage\.xml$/);
+    expect(commands[1]).toMatch(/ -m coverage combine --data-file=\S+[\\/]\.coverage$/);
+    expect(commands[2]).toMatch(/ -m coverage xml --data-file=\S+[\\/]\.coverage -o \S+[\\/]coverage\.xml$/);
     expect(covered(s.store, calc)).toEqual(ALL_BUT_RAISE);
 
     s.store.clear();
@@ -140,9 +141,10 @@ describe('python-unittest (only coverage.py)', () => {
 
   test('unittest with only coverage.py installed', async () => {
     const commands = await s.run({ kind: 'full' });
-    expect(commands).toHaveLength(2);
+    expect(commands).toHaveLength(3);
     expect(commands[0]).toMatch(/ -m coverage run --data-file=\S+[\\/]\.coverage -m unittest discover$/);
-    expect(commands[1]).toMatch(/ -m coverage xml --data-file=\S+ -o \S+[\\/]coverage\.xml$/);
+    expect(commands[1]).toMatch(/ -m coverage combine --data-file=\S+[\\/]\.coverage$/);
+    expect(commands[2]).toMatch(/ -m coverage xml --data-file=\S+ -o \S+[\\/]coverage\.xml$/);
     expect(covered(s.store, calc)).toEqual(ALL_BUT_RAISE);
 
     s.store.clear();

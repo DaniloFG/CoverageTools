@@ -86,7 +86,8 @@ describe('resolveInterpreter', () => {
     expect(await resolveInterpreter(DIR, DEFAULT_SETTINGS, fs, undefined, 'linux')).toBe(posix);
     expect(await resolveInterpreter(DIR, DEFAULT_SETTINGS, fs, undefined, 'darwin')).toBe(posix);
     expect(await resolveInterpreter(DIR, DEFAULT_SETTINGS, fs, undefined, 'win32')).toBe(windows);
-    expect(await resolveInterpreter(DIR, DEFAULT_SETTINGS, memFs({ [posix]: '' }), undefined, 'win32')).toBe('python3');
+    // On Windows `python3` is often the Microsoft Store alias: the py launcher comes first.
+    expect(await resolveInterpreter(DIR, DEFAULT_SETTINGS, memFs({ [posix]: '' }), undefined, 'win32')).toBe('py');
   });
 });
 
@@ -113,8 +114,8 @@ describe('plan', () => {
     for (const installed of [PYTEST_COVERAGE, COVERAGE_ONLY]) {
       const { ctx } = context(installed, { files: venv });
       const plan = await adapter.plan(project, FULL, ctx);
-      expect(plan.steps).toHaveLength(2);
-      expect(plan.steps[1]).toMatchObject({
+      expect(plan.steps).toHaveLength(3);
+      expect(plan.steps[2]).toMatchObject({
         command: posixVenv(DIR), cwd: DIR,
         args: ['-m', 'coverage', 'xml', `--data-file=${COVERAGE_FILE}`, '-o', XML],
       });
@@ -156,6 +157,28 @@ describe('plan', () => {
     const failed = await adapter.plan(project, FULL, none.ctx);
     expect(failed.steps).toEqual([]);
     expect(failed.hint).toContain('"python3"');
+  });
+
+  test('Windows tries py, then python, then python3', async () => {
+    const win = createPythonAdapter({ platform: 'win32' });
+    const { ctx, probes } = context(async spec => {
+      if (spec.command !== 'python3') throw new Error(`spawn ${spec.command} ENOENT`);
+      return { code: 0, stdout: JSON.stringify(ALL) };
+    });
+    const plan = await win.plan(project, FULL, ctx);
+    expect(probes.map(p => p.command)).toEqual(['py', 'python', 'python3']);
+    expect(plan.steps[0].command).toBe('python3');
+  });
+
+  test('without pytest-cov, parallel coverage data is combined (a failure of that step is ignored) before the XML is written', async () => {
+    for (const installed of [PYTEST_COVERAGE, COVERAGE_ONLY]) {
+      const { ctx } = context(installed, { files: venv });
+      const steps = (await adapter.plan(project, FULL, ctx)).steps;
+      expect(steps.slice(-2)).toMatchObject([
+        { args: ['-m', 'coverage', 'combine', `--data-file=${COVERAGE_FILE}`], ignoreFailure: true },
+        { args: ['-m', 'coverage', 'xml', `--data-file=${COVERAGE_FILE}`, '-o', XML] },
+      ]);
+    }
   });
 
   test('the Python extension selection is used when the project has no environment of its own', async () => {
@@ -222,6 +245,7 @@ describe('plan', () => {
       [...run, path.join('b', 'test_x.py')],
       [...run, 'discover', '-s', 'a'],
       [...run, 'discover', '-s', 'c'],
+      ['-m', 'coverage', 'combine', `--data-file=${COVERAGE_FILE}`],
       ['-m', 'coverage', 'xml', `--data-file=${COVERAGE_FILE}`, '-o', XML],
     ]);
   });
@@ -237,6 +261,7 @@ describe('plan', () => {
     expect(plan.steps.map(s => s.args)).toEqual([
       [...run, path.join('other', 'test_b.py')],
       [...run, 'discover', '-s', 'tests'],
+      ['-m', 'coverage', 'combine', `--data-file=${COVERAGE_FILE}`],
       ['-m', 'coverage', 'xml', `--data-file=${COVERAGE_FILE}`, '-o', XML],
     ]);
   });
@@ -363,4 +388,11 @@ describe('detect and isTestFile', () => {
     expect(await is(path.resolve('/elsewhere/test_calc.py'))).toBe(false);
     expect(await is(path.join(DIR, '.venv', 'lib', 'test_x.py'))).toBe(false);
   });
+});
+
+test('test files inside tox, nox, conda and site-packages directories are not the project\'s', async () => {
+  for (const dirName of ['.tox', '.nox', '.conda', 'site-packages']) {
+    expect(await pythonAdapter.isTestFile(project, path.join(DIR, dirName, 'lib', 'test_x.py'), memFs({}))).toBe(false);
+  }
+  expect(await pythonAdapter.isTestFile(project, path.join(DIR, 'tests', 'test_x.py'), memFs({}))).toBe(true);
 });

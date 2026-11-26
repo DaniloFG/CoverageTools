@@ -208,3 +208,21 @@ test('dispose clears the pending discovery', async () => {
   discovery.dispose();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+test('a burst of events before the first discovery finishes does not trigger a second discovery', async () => {
+  const log: string[] = [];
+  let open!: () => void;
+  gate = new Promise<void>(resolve => { open = resolve; });
+  const fresh = new ProjectDiscovery({
+    makeFs: memoryFs, adapters: [jestAdapter, pythonAdapter, dotnetVstestAdapter], settingsOf: () => DEFAULT_SETTINGS,
+    log: msg => log.push(msg), events, onState: () => {},
+  });
+  fresh.start();
+  await vi.advanceTimersByTimeAsync(0);
+  for (let i = 0; i < 1_000; i++) fire('change', n(`/w/T/F${i}.cs`));
+  gate = undefined;
+  open();
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(log.filter(l => l.startsWith('Discovery finished'))).toHaveLength(1);
+  fresh.dispose();
+});

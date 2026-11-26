@@ -134,6 +134,11 @@
             "**/obj/**",
             "**/.venv/**",
             "**/venv/**",
+            "**/.tox/**",
+            "**/.nox/**",
+            "**/.conda/**",
+            "**/site-packages/**",
+            "**/build/lib/**",
             "**/__pycache__/**"
           ],
           "description": "Glob patterns, relative to each workspace folder, of paths ignored during discovery and watching."

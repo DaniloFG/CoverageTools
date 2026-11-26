@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import type { Project, RunTarget } from '../../../src/adapters/types';
 import {
-  batchNotices, failureDetails, InFlight, lineLogger, loggedRun, outcomeNotice, progressMessage, runBatch, type RunItem,
+  batchNotices, failureDetails, InFlight, lineLogger, loggedRun, mergeRunItems, outcomeNotice, progressMessage, runBatch, type RunItem,
 } from '../../../src/runner/batch';
 import { RunQueue } from '../../../src/runner/queue';
 import type { RunOutcome } from '../../../src/runner/runProject';
@@ -225,4 +225,43 @@ test('lineLogger keeps an unfinished line until flush', () => {
   l.flush();
   l.flush();
   expect(logs).toEqual(['a', 'b']);
+});
+
+test('an onStart that throws still releases the claim and settles the item as a spawn error', async () => {
+  const inFlight = new InFlight();
+  const items = inFlight.claim([item('a')]);
+  const results = await runBatch(items, {
+    queue: new RunQueue(), inFlight, run: async () => ({ status: 'ok' }),
+    onStart: () => { throw new Error('progress is gone'); },
+  });
+  expect(results[0].outcome.status).toBe('spawn-error');
+  expect(inFlight.claim([item('a')])).toHaveLength(1);
+});
+
+test('mergeRunItems: one run per project with the union of its paths, none contained in another selected folder', () => {
+  const a = project('a');
+  const b = project('b');
+  const p = (proj: Project, ...paths: string[]): RunItem => ({ project: proj, target: { kind: 'partial', paths } });
+  expect(mergeRunItems([p(a, '/w/a/t/x.test.js'), p(b, '/w/b/y.test.js'), p(a, '/w/a/t/z.test.js')])).toEqual([
+    p(a, '/w/a/t/x.test.js', '/w/a/t/z.test.js'), p(b, '/w/b/y.test.js'),
+  ]);
+  expect(mergeRunItems([p(a, '/w/a/t/x.test.js'), p(a, '/w/a/t'), p(a, '/w/a/t')])).toEqual([p(a, '/w/a/t')]);
+  expect(mergeRunItems([p(a, '/w/a/t'), p(a, '/w/a/tt/x.test.js')])).toEqual([p(a, '/w/a/t', '/w/a/tt/x.test.js')]);
+  // A full run of a project covers any partial run of it.
+  expect(mergeRunItems([p(a, '/w/a/t/x.test.js'), { project: a, target: full }, p(b, '/w/b/y.test.js')])).toEqual([
+    { project: a, target: full }, p(b, '/w/b/y.test.js'),
+  ]);
+});
+
+test('a run that only missed its coverage threshold says so, not "Tests failed"', () => {
+  expect(outcomeNotice('web', { status: 'threshold-not-met' })).toEqual({
+    severity: 'warning', text: 'Coverage threshold not met in web; coverage was still loaded.', showOutput: false,
+  });
+  expect(failureDetails('web', { status: 'threshold-not-met', message: 'The coverage threshold was not met' }))
+    .toBe('Coverage threshold not met in web (threshold-not-met): The coverage threshold was not met');
+  const r = (name: string, outcome: RunOutcome) => ({ item: item(name), outcome });
+  expect(batchNotices([r('a', { status: 'threshold-not-met' }), r('b', { status: 'threshold-not-met' }), r('c', { status: 'tests-failed' })])).toEqual([
+    { severity: 'warning', text: 'Tests failed in c; coverage was still loaded.', showOutput: false },
+    { severity: 'warning', text: 'Coverage threshold not met in a, b; coverage was still loaded.', showOutput: false },
+  ]);
 });

@@ -24,6 +24,8 @@ export interface CommandSpec {
   env?: Readonly<Record<string, string>>;
   /** Runs `command` as a full command line through the platform shell; `args` are ignored. */
   shell?: boolean;
+  /** A non-zero exit of this step is not a failure of the run (a step that has nothing to do may exit 1). */
+  ignoreFailure?: boolean;
 }
 
 export interface RunPlan {
@@ -35,6 +37,11 @@ export interface RunPlan {
    * temp directory only reports written during the run count.
    */
   reportSearchDir: string;
+  /**
+   * The steps write one report each (a long selection split in several runs): a partial run loads
+   * and unions every report found instead of the best one.
+   */
+  unionReports?: boolean;
   /** Shown to the user when no report is found. */
   hint: string;
 }
@@ -50,6 +57,8 @@ export interface PlanContext {
   fs: FsReader;
   settings: Settings;
   c8Bin: string;
+  /** For tests: the longest command line a run may use (see `commandLineLimit` in nodeShared). */
+  commandLineLimit?: number;
   probe(spec: CommandSpec): Promise<{ code: number | null; stdout: string }>;
 }
 

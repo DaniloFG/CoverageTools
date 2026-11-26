@@ -380,3 +380,46 @@ test('relative report paths resolve against the project that ran before the othe
   expect(store.merged().map(e => e.path)).toEqual([path.join(rootB, 'src', 'calc.js')]);
   expect(seenRoots).toEqual([rootB, root, rootA]);
 });
+
+/** A step that writes an LCOV report and prints `text` (to stderr) before exiting with code 1. */
+function failingWith(reportPath: string, text: string): CommandSpec {
+  const script = `require("fs").writeFileSync(process.argv[1], process.argv[2]); console.error(process.argv[3]); process.exit(1)`;
+  return { command: NODE, args: ['-e', script, reportPath, lcov(1), text], cwd: root };
+}
+
+test.each([
+  'Jest: "global" coverage threshold for statements (90%) not met: 50%',
+  'FAIL Required test coverage of 90% not reached. Total coverage: 50.00%',
+  'Coverage failure: total of 50 is less than fail-under=90',
+  'ERROR: Coverage for lines (50%) does not meet global threshold (90%)',
+])('a non-zero exit that only the coverage threshold caused is threshold-not-met, and coverage is loaded: %s', async text => {
+  planFor = ctx => ({ steps: [failingWith(path.join(ctx.tmpDir, 'lcov.info'), `Tests: 3 passed, 3 total\n${text}`)], reportSearchDir: ctx.tmpDir, hint: '' });
+  const outcome = await runProject(project, full, deps(), live());
+  expect(outcome.status).toBe('threshold-not-met');
+  expect(store.merged().map(e => e.path)).toEqual([srcA]);
+});
+
+test('failing tests next to a threshold message are still tests-failed', async () => {
+  planFor = ctx => ({
+    steps: [failingWith(path.join(ctx.tmpDir, 'lcov.info'), 'Tests: 2 failed, 3 passed\ncoverage threshold for lines (90%) not met')],
+    reportSearchDir: ctx.tmpDir, hint: '',
+  });
+  expect((await runProject(project, full, deps(), live())).status).toBe('tests-failed');
+});
+
+test('a partial plan with unionReports loads every report it wrote', async () => {
+  const second = path.join(root, 'src', 'b.js');
+  planFor = ctx => ({
+    steps: [
+      writeLcov(path.join(ctx.tmpDir, 'p1', 'lcov.info'), 1, { cwd: root }),
+      { command: NODE, args: ['-e', `require("fs").mkdirSync(process.argv[1] + "/p2", {recursive:true}); require("fs").writeFileSync(process.argv[1] + "/p2/lcov.info", "SF:" + process.argv[2] + "\\nDA:1,4\\nend_of_record\\n")`, ctx.tmpDir, second], cwd: root },
+    ],
+    reportSearchDir: ctx.tmpDir, hint: '', unionReports: true,
+  });
+  // The first step writes into a directory that does not exist yet: create it up front.
+  const base = planFor;
+  planFor = (ctx, t) => { mkdirSync(path.join(ctx.tmpDir, 'p1')); return base(ctx, t); };
+  const outcome = await runProject(project, partial(), deps(), live());
+  expect(outcome.status).toBe('ok');
+  expect(store.merged().map(e => e.path)).toEqual([srcA, srcB]);
+});

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { Project, RunTarget } from '../adapters/types';
 import type { RunOutcome } from './runProject';
 
@@ -42,6 +43,31 @@ export class InFlight {
   }
 }
 
+const isUnder = (child: string, parent: string): boolean => {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+/**
+ * One item per project, in order of first appearance: a full run of a project covers its partial
+ * runs; partial runs of the same project become one with the union of their paths, leaving out any
+ * path that lies inside another selected path (a selected folder runs its files already).
+ */
+export function mergeRunItems(items: readonly RunItem[]): RunItem[] {
+  const byProject = new Map<string, { project: Project; full: boolean; paths: string[] }>();
+  for (const { project, target } of items) {
+    let entry = byProject.get(project.key);
+    if (entry === undefined) byProject.set(project.key, entry = { project, full: false, paths: [] });
+    if (target.kind === 'full') entry.full = true;
+    else entry.paths.push(...target.paths);
+  }
+  return [...byProject.values()].map(({ project, full, paths }): RunItem => {
+    if (full) return { project, target: { kind: 'full' } };
+    const unique = [...new Set(paths)];
+    return { project, target: { kind: 'partial', paths: unique.filter(p => !unique.some(o => o !== p && isUnder(p, o))) } };
+  });
+}
+
 /**
  * Puts every item on the run queue at once (so later requests queue behind all of them) and
  * resolves with each item's outcome, in order, once all have settled. The queue runs one item at a
@@ -49,8 +75,8 @@ export class InFlight {
  */
 export function runBatch(items: readonly RunItem[], deps: BatchDeps): Promise<RunResult[]> {
   return Promise.all(items.map((item, i) => deps.queue.enqueue(async (signal): Promise<RunResult> => {
-    if (!signal.aborted) deps.onStart?.(item, i + 1, items.length);
     try {
+      if (!signal.aborted) deps.onStart?.(item, i + 1, items.length);
       return { item, outcome: await deps.run(item, signal) };
     } catch (e) {
       return { item, outcome: { status: 'spawn-error', message: messageOf(e) } };
@@ -124,6 +150,9 @@ export function outcomeNotice(name: string, outcome: RunOutcome): Notice | undef
   if (outcome.status === 'tests-failed') {
     return { severity: 'warning', text: `Tests failed in ${name}; coverage was still loaded.`, showOutput: false };
   }
+  if (outcome.status === 'threshold-not-met') {
+    return { severity: 'warning', text: `Coverage threshold not met in ${name}; coverage was still loaded.`, showOutput: false };
+  }
   if (!failed(outcome)) return undefined;
   return { severity: 'error', text: `Coverage failed for ${name}: ${detail(outcome) || 'no coverage report was found.'}`, showOutput: true };
 }
@@ -132,6 +161,7 @@ export function outcomeNotice(name: string, outcome: RunOutcome): Notice | undef
 export function failureDetails(name: string, outcome: RunOutcome): string | undefined {
   const text = detail(outcome);
   if (outcome.status === 'tests-failed') return `Tests failed in ${name} (tests-failed)${text ? `: ${text}` : ''}`;
+  if (outcome.status === 'threshold-not-met') return `Coverage threshold not met in ${name} (threshold-not-met)${text ? `: ${text}` : ''}`;
   if (!failed(outcome)) return undefined;
   return `Coverage failed for ${name} (${outcome.status})${text ? `: ${text}` : ''}`;
 }
@@ -147,10 +177,14 @@ export function batchNotices(results: readonly RunResult[]): Notice[] {
   }
   const names = (keep: (o: RunOutcome) => boolean) => results.filter(r => keep(r.outcome)).map(r => r.item.project.name);
   const testsFailed = names(o => o.status === 'tests-failed');
+  const thresholds = names(o => o.status === 'threshold-not-met');
   const errors = names(failed);
   const notices: Notice[] = [];
   if (testsFailed.length > 0) {
     notices.push({ severity: 'warning', text: `Tests failed in ${testsFailed.join(', ')}; coverage was still loaded.`, showOutput: false });
+  }
+  if (thresholds.length > 0) {
+    notices.push({ severity: 'warning', text: `Coverage threshold not met in ${thresholds.join(', ')}; coverage was still loaded.`, showOutput: false });
   }
   if (errors.length > 0) {
     notices.push({

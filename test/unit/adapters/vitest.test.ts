@@ -184,3 +184,24 @@ test('a vitest bench script is not a test script', async () => {
     command: 'npx', args: ['--no-install', 'vitest', 'run', ...COVERAGE_ARGS],
   });
 });
+
+test('a selection too long for one command line is split; every run excludes the other files its filters would match', async () => {
+  const names = ['src/a.test.ts', 'src/a.test.tsx', 'src/b.test.ts', 'src/c.test.ts', 'lib/src/a.test.ts', 'src/other.test.ts'];
+  const abs = (rel: string): string => path.join(dir, ...rel.split('/'));
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'vitest' } }), ...Object.fromEntries(names.map(n => [abs(n), ''])) });
+  const selected = ['src/a.test.ts', 'src/b.test.ts', 'src/c.test.ts'];
+  const plan = await vitestAdapter.plan(project, { kind: 'partial', paths: selected.map(abs) }, { ...ctx(fs), commandLineLimit: 240 });
+  expect(plan.steps.length).toBeGreaterThan(1);
+  expect(plan.unionReports).toBe(true);
+  const filtersOf = (args: readonly string[]) => args.filter(a => a.startsWith('src/') && !a.startsWith('--'));
+  const excludesOf = (args: readonly string[]) => args.filter(a => a.startsWith('--exclude=')).map(a => a.slice('--exclude='.length));
+  expect(plan.steps.flatMap(s => filtersOf(s.args))).toEqual(selected);
+  for (const s of plan.steps) {
+    const mine = filtersOf(s.args);
+    // Exactly the files other than this run's own that one of its filters matches.
+    const expected = names.filter(n => !mine.includes(n) && mine.some(f => n.toLowerCase().includes(f.toLowerCase()))).sort();
+    expect(excludesOf(s.args).sort()).toEqual(expected);
+    expect(s.args.join(' ').length).toBeLessThanOrEqual(240);
+    expect(s.args).toContain(`--coverage.reportsDirectory=${path.join(tmp, `part-${plan.steps.indexOf(s) + 1}`)}`);
+  }
+});

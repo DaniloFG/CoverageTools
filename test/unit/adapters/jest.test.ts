@@ -158,3 +158,24 @@ test('isTestFile follows the default Jest patterns including .mjs/.cjs/.mts/.cts
   for (const p of yes) expect(await jestAdapter.isTestFile(project, path.join(dir, p), fs), p).toBe(true);
   for (const p of no) expect(await jestAdapter.isTestFile(project, path.join(dir, p), fs), p).toBe(false);
 });
+
+test('a selection too long for one command line is split into several runs, each with its own coverage directory', async () => {
+  const names = Array.from({ length: 6 }, (_, i) => `src/module-number-${i}.test.ts`);
+  const abs = (rel: string): string => path.join(dir, ...rel.split('/'));
+  const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test: 'jest' } }), ...Object.fromEntries(names.map(n => [abs(n), ''])) });
+  const small: PlanContext = { ...ctx(fs), commandLineLimit: 250 };
+  const plan = await jestAdapter.plan(project, { kind: 'partial', paths: [path.join(dir, 'src')] }, small);
+  expect(plan.steps.length).toBeGreaterThan(1);
+  expect(plan.unionReports).toBe(true);
+  const files = plan.steps.flatMap(s => s.args.slice(s.args.indexOf('--runTestsByPath') + 1));
+  expect(files).toEqual(names);
+  const dirs = plan.steps.map(s => s.args.find(a => a.startsWith('--coverageDirectory='))!);
+  expect(new Set(dirs).size).toBe(plan.steps.length);
+  for (const d of dirs) expect(d.startsWith(`--coverageDirectory=${tmp}`)).toBe(true);
+  for (const s of plan.steps) expect(s.args.join(' ').length).toBeLessThanOrEqual(250);
+  // A selection that fits stays one step with the plain coverage directory.
+  const roomy = await jestAdapter.plan(project, { kind: 'partial', paths: [path.join(dir, 'src')] }, { ...ctx(fs), commandLineLimit: 100_000 });
+  expect(roomy.steps).toHaveLength(1);
+  expect(roomy.unionReports).toBeUndefined();
+  expect(roomy.steps[0].args).toContain(`--coverageDirectory=${tmp}`);
+});

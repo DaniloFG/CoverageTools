@@ -103,3 +103,10 @@ test('Windows: backslashes and drive-letter case are normalized', () => {
   expect(resolveReportPath('src/a.cs', ['c:\\w'], c, path.win32)).toBe('C:\\w\\src\\a.cs');
   expect(resolveReportPath('/_/src/a.cs', [], c, path.win32)).toBe('C:\\w\\src\\a.cs');
 });
+
+test('a report outside every root tries the roots before the report directory\'s ancestors', () => {
+  const c = ctxOf(['/tmp/src/a.js', '/w/src/a.js', '/tmp/run-1/only-up.js'], '/tmp/run-1/cov', ['/w']);
+  expect(resolveReportPath('src/a.js', [], c, path.posix)).toBe('/w/src/a.js');
+  // Ancestors are still a last resort for a file no root has.
+  expect(resolveReportPath('only-up.js', [], c, path.posix)).toBe('/tmp/run-1/only-up.js');
+});

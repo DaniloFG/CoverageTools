@@ -1,5 +1,6 @@
 import path from 'node:path';
-import type { FsReader, Project } from './types';
+import { cmdCommandLine, quoteForCmd } from '../runner/exec';
+import type { FsReader, PlanContext, Project } from './types';
 
 /** The parts of a package.json the Node adapters read. */
 export interface PackageJson {
@@ -318,4 +319,47 @@ export function localBin(pm: PackageManager, bin: string, extra: readonly string
 /** `p` relative to `dir`, with forward slashes. */
 export function relativePosix(dir: string, p: string): string {
   return path.relative(dir, p).split(path.sep).join('/');
+}
+
+/**
+ * Longest command line a plan may build. On Windows the Node package managers run through
+ * `cmd.exe /c`, whose limit is 8,191 characters; 6,000 leaves room for what the shell adds. Elsewhere
+ * the limit (hundreds of kilobytes) is never reached by a selection of test files.
+ */
+export function commandLineLimit(ctx: Pick<PlanContext, 'commandLineLimit'>): number {
+  return ctx.commandLineLimit ?? (process.platform === 'win32' ? 6000 : Number.POSITIVE_INFINITY);
+}
+
+/** The length one argument adds to a `cmd.exe` command line, worst case (quoting for a node_modules shim), with its space. */
+export function argCost(arg: string): number {
+  return quoteForCmd(arg, true).length + 1;
+}
+
+/** The length of the command line of `call` as cmd.exe gets it. */
+export function lineLength(call: { command: string; args: readonly string[] }): number {
+  return cmdCommandLine(call.command, call.args).length;
+}
+
+/**
+ * Splits `items` in order into groups that each fit in `limit` characters next to `base` characters of
+ * fixed command line; an item too long to fit gets a group of its own.
+ */
+export function splitByCost(items: readonly string[], base: number, limit: number): string[][] {
+  const groups: string[][] = [];
+  let used = Number.POSITIVE_INFINITY;
+  for (const item of items) {
+    const cost = argCost(item);
+    if (groups.length === 0 || used + cost > limit) {
+      groups.push([]);
+      used = base;
+    }
+    groups[groups.length - 1].push(item);
+    used += cost;
+  }
+  return groups;
+}
+
+/** Where chunk `n` (1-based) of a split run writes its report; the plain directory when it is not split. */
+export function chunkDir(tmpDir: string, n: number, chunks: number): string {
+  return chunks === 1 ? tmpDir : path.join(tmpDir, `part-${n}`);
 }

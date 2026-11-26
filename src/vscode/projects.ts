@@ -180,9 +180,10 @@ export class ProjectDiscovery {
     if (this.disposed || this.timer !== undefined) return;
     this.pending.set(e.path, e);
     if (this.pending.size > MAX_PENDING) {
-      // A build or a checkout: one discovery is cheaper than this many refreshes.
+      // A build or a checkout: one discovery is cheaper than this many refreshes. While the first
+      // discovery is still running it sees these changes itself: no second one.
       this.pending.clear();
-      this.schedule();
+      if (this.state !== undefined) this.schedule();
       return;
     }
     void this.drainRefreshes();

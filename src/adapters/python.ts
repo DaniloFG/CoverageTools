@@ -6,7 +6,7 @@ const MARKERS = ['pyproject.toml', 'setup.py', 'setup.cfg', 'pytest.ini', 'tox.i
 const TEST_FILE_GLOBS = ['**/test_*.py', '**/*_test.py'];
 const TEST_FILE_NAME = /^(test_.*|.*_test)\.py$/;
 /** Directories whose files never count as the project's test files (the default excludes). */
-const SKIPPED_DIRS = new Set(['node_modules', 'bin', 'obj', '.venv', 'venv', '__pycache__']);
+const SKIPPED_DIRS = new Set(['node_modules', 'bin', 'obj', '.venv', 'venv', '.tox', '.nox', '.conda', 'site-packages', '__pycache__']);
 
 /**
  * The configuration files pytest picks from, in its order of precedence: in a directory it reads
@@ -52,8 +52,8 @@ export interface PythonAdapterOptions {
 
 /**
  * The interpreter for a project: the `coverageTools.python.interpreter` setting; the project's own
- * `.venv`, then `venv`; the interpreter selected in the Python extension; `python3`. (When `python3`
- * cannot be started, the adapter falls back to `python` itself.)
+ * `.venv`, then `venv`; the interpreter selected in the Python extension; `python3` (`py` on Windows). (When that
+ * cannot be started, the adapter tries the other usual names itself.)
  */
 export async function resolveInterpreter(
   projectDir: string,
@@ -69,22 +69,36 @@ export async function resolveInterpreter(
     if (await fs.exists(candidate)) return candidate;
   }
   if (selectedByPythonExtension) return selectedByPythonExtension;
-  return 'python3';
+  return defaultInterpreters(platform)[0];
 }
 
 /**
- * Runs `attempt` with the resolved interpreter; when that is the `python3` fallback and the attempt
- * fails (returns undefined: it could not be started), tries `python` once. Returns the interpreter
- * that worked, or the original one when neither did.
+ * The interpreters tried when none is configured or found, in order. On Windows `python` and
+ * `python3` may be the Microsoft Store aliases (which open the Store when Python is missing), so the
+ * py launcher goes first.
+ */
+function defaultInterpreters(platform: NodeJS.Platform): readonly string[] {
+  return platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python'];
+}
+
+/**
+ * Runs `attempt` with the resolved interpreter; when that is the default one (`python3`, `py` on
+ * Windows) and the attempt fails (returns undefined: it could not be started), tries the other
+ * defaults in turn. Returns the interpreter that worked, or the original one when none did.
  */
 export async function withPythonFallback<T>(
   python: string,
   attempt: (python: string) => Promise<T | undefined>,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<{ python: string; result: T | undefined }> {
   const result = await attempt(python);
-  if (result !== undefined || python !== 'python3') return { python, result };
-  const second = await attempt('python');
-  return second === undefined ? { python, result } : { python: 'python', result: second };
+  const defaults = defaultInterpreters(platform);
+  if (result !== undefined || python !== defaults[0]) return { python, result };
+  for (const other of defaults.slice(1)) {
+    const next = await attempt(other);
+    if (next !== undefined) return { python: other, result: next };
+  }
+  return { python, result };
 }
 
 /** Removes a comment from one line: a whole-line `#`/`;` comment, or a `#` (INI: also `;`) after whitespace. */
@@ -231,7 +245,7 @@ export function createPythonAdapter(options: PythonAdapterOptions = {}): Adapter
     async plan(project, target, ctx): Promise<RunPlan> {
       const selected = await options.selectedInterpreter?.(project.dir);
       const resolved = await resolveInterpreter(project.dir, ctx.settings, ctx.fs, selected, platform);
-      const { python, result: installed } = await withPythonFallback(resolved, p => probeInterpreter(p, project.dir, ctx));
+      const { python, result: installed } = await withPythonFallback(resolved, p => probeInterpreter(p, project.dir, ctx), platform);
       const reportSearchDir = ctx.tmpDir;
       if (installed === undefined) return { steps: [], reportSearchDir, hint: cannotRunHint(python) };
 
@@ -240,7 +254,12 @@ export function createPythonAdapter(options: PythonAdapterOptions = {}): Adapter
       const step = (args: string[]): CommandSpec => ({ command: python, args, cwd: project.dir, env: { COVERAGE_FILE: dataFile } });
       const extraArgs = ctx.settings.pythonExtraArgs;
       const paths = target.kind === 'partial' ? target.paths.map(p => relativeTo(project.dir, p)) : [];
-      const convert = step(['-m', 'coverage', 'xml', `--data-file=${dataFile}`, '-o', xml]);
+      // `parallel = true` makes `coverage run` write `.coverage.<host>.<pid>.<rand>` files: they are combined
+      // first. Without such files combine exits 1 ("No data to combine"), which is fine.
+      const convert = [
+        { ...step(['-m', 'coverage', 'combine', `--data-file=${dataFile}`]), ignoreFailure: true },
+        step(['-m', 'coverage', 'xml', `--data-file=${dataFile}`, '-o', xml]),
+      ];
 
       if (installed.pytest && installed.pytest_cov) {
         const stopAt = typeof project.meta.workspaceFolder === 'string' ? project.meta.workspaceFolder : undefined;
@@ -252,7 +271,7 @@ export function createPythonAdapter(options: PythonAdapterOptions = {}): Adapter
       }
       if (installed.pytest && installed.coverage) {
         return {
-          steps: [step(['-m', 'coverage', 'run', `--data-file=${dataFile}`, '-m', 'pytest', ...extraArgs, ...paths]), convert],
+          steps: [step(['-m', 'coverage', 'run', `--data-file=${dataFile}`, '-m', 'pytest', ...extraArgs, ...paths]), ...convert],
           reportSearchDir, hint: NO_REPORT_HINT,
         };
       }
@@ -260,7 +279,7 @@ export function createPythonAdapter(options: PythonAdapterOptions = {}): Adapter
         const runs = unittestRuns(project, target, extraArgs);
         const append = runs.length > 1 ? ['--append'] : [];
         return {
-          steps: [...runs.map(args => step(['-m', 'coverage', 'run', ...append, `--data-file=${dataFile}`, '-m', 'unittest', ...args])), convert],
+          steps: [...runs.map(args => step(['-m', 'coverage', 'run', ...append, `--data-file=${dataFile}`, '-m', 'unittest', ...args])), ...convert],
           reportSearchDir, hint: NO_REPORT_HINT,
         };
       }

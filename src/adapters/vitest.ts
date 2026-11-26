@@ -1,6 +1,6 @@
 import path from 'node:path';
 import {
-  localBin, NO_TEST_FILES_HINT, packageManagerOf, readPackageJson, relativePosix, scriptCommand, scriptTailCalls,
+  argCost, chunkDir, commandLineLimit, lineLength, localBin, NO_TEST_FILES_HINT, packageManagerOf, readPackageJson, relativePosix, scriptCommand, scriptTailCalls,
   selectedTestFiles, workspaceFolderOf,
 } from './nodeShared';
 import type { Adapter, FsReader, Project } from './types';
@@ -58,25 +58,33 @@ export const vitestAdapter: Adapter = {
   async plan(project, target, ctx) {
     const pkg = (await readPackageJson(path.join(project.dir, 'package.json'), ctx.fs)) ?? {};
     const pm = await packageManagerOf(project.dir, ctx.fs, workspaceFolderOf(project));
-    const selection = target.kind === 'partial' ? await partialArgs(project, target.paths, ctx.fs, ctx.settings.exclude) : [];
-    if (selection.length === 0 && target.kind === 'partial') {
-      return { steps: [], reportSearchDir: ctx.tmpDir, hint: NO_TEST_FILES_HINT };
-    }
-    const args = [
-      '--coverage',
-      '--coverage.reporter=json',
-      `--coverage.reportsDirectory=${ctx.tmpDir}`,
-      // Vitest 4 writes no report when a test fails unless asked to (Jest always writes one).
-      '--coverage.reportOnFailure',
-      ...ctx.settings.nodeExtraArgs,
-      ...selection,
-    ];
     const call = scriptTailCalls(pkg, VITEST_TOOL, VITEST_WATCH);
-    // A bare `vitest` starts watch mode in a terminal: CI=true (and `run` for the binary) makes it run once.
-    const { command, args: fullArgs } = call !== undefined ? scriptCommand(pm, call.script, args) : localBin(pm, 'vitest', ['run', ...args]);
+    const build = (reportsDir: string, selection: readonly string[]) => {
+      const args = [
+        '--coverage',
+        '--coverage.reporter=json',
+        `--coverage.reportsDirectory=${reportsDir}`,
+        // Vitest 4 writes no report when a test fails unless asked to (Jest always writes one).
+        '--coverage.reportOnFailure',
+        ...ctx.settings.nodeExtraArgs,
+        ...selection,
+      ];
+      // A bare `vitest` starts watch mode in a terminal: CI=true (and `run` for the binary) makes it run once.
+      return call !== undefined ? scriptCommand(pm, call.script, args) : localBin(pm, 'vitest', ['run', ...args]);
+    };
+    let selections: string[][] = [[]];
+    if (target.kind === 'partial') {
+      // A command line too long for the shell (Windows): several runs, whose reports are unioned.
+      const base = lineLength(build(chunkDir(ctx.tmpDir, 9999, 2), []));
+      selections = await partialChunks(project, target.paths, ctx.fs, ctx.settings.exclude, base, commandLineLimit(ctx));
+      if (selections.length === 0) return { steps: [], reportSearchDir: ctx.tmpDir, hint: NO_TEST_FILES_HINT };
+    }
     return {
-      steps: [{ command, args: fullArgs, cwd: project.dir, env: { ...call?.env, CI: 'true' } }],
+      steps: selections.map((selection, i) => ({
+        ...build(chunkDir(ctx.tmpDir, i + 1, selections.length), selection), cwd: project.dir, env: { ...call?.env, CI: 'true' },
+      })),
       reportSearchDir: ctx.tmpDir,
+      ...(selections.length > 1 ? { unionReports: true } : {}),
       hint: HINT,
     };
   },
@@ -88,20 +96,62 @@ const isTestRel = (rel: string): boolean => VITEST_TEST_FILE.test(rel);
  * The arguments that make Vitest run exactly the selected test files: the files as filters, preceded by
  * an `--exclude` for every other test file of the project that a filter would also match (Vitest's
  * filters are case-insensitive substrings of the path relative to the project). Empty when nothing
- * is selected.
+ * is selected. One list of arguments for each run: a selection whose arguments do not fit in `limit`
+ * characters next to `base` fixed ones is split, and the other runs' files count as "other files"
+ * for each run, so every run stays exact.
  */
-async function partialArgs(project: Project, paths: readonly string[], fs: FsReader, exclude: readonly string[]): Promise<string[]> {
+async function partialChunks(
+  project: Project, paths: readonly string[], fs: FsReader, exclude: readonly string[], base: number, limit: number,
+): Promise<string[][]> {
   const selected = await selectedTestFiles(project.dir, paths, fs, exclude, isTestRel);
   if (selected.length === 0) return [];
-  const filters = selected.map(p => relativePosix(project.dir, p));
-  const lowered = filters.map(f => f.toLowerCase());
-  const chosen = new Set(selected);
   const all = await selectedTestFiles(project.dir, [project.dir], fs, exclude, isTestRel);
-  const excluded = all
-    .filter(p => !chosen.has(p))
-    .map(p => relativePosix(project.dir, p))
-    .filter(rel => lowered.some(f => rel.toLowerCase().includes(f)));
-  return [...excluded.map(rel => `--exclude=${rel.replace(GLOB_SPECIAL, '\\$&')}`), ...filters];
+  const rels = all.map(p => relativePosix(project.dir, p));
+  const lowered = rels.map(r => r.toLowerCase());
+  const index = new Map(all.map((p, i) => [p, i]));
+  const filters = selected.map(p => relativePosix(project.dir, p));
+  /** For each selected file, the files (positions in `all`) its filter matches, itself included. */
+  const matches = filters.map(f => {
+    const needle = f.toLowerCase();
+    return lowered.flatMap((r, i) => (r.includes(needle) ? [i] : []));
+  });
+  const excludeArg = (i: number): string => `--exclude=${rels[i].replace(GLOB_SPECIAL, '\\$&')}`;
+
+  const chunks: string[][] = [];
+  let own = new Set<number>();
+  let excluded = new Set<number>();
+  let filterArgs: string[] = [];
+  let used = 0;
+  const close = (): void => {
+    chunks.push([...[...excluded].sort((a, b) => a - b).map(excludeArg), ...filterArgs]);
+  };
+  for (const [n, file] of selected.entries()) {
+    const at = index.get(file);
+    const fresh = matches[n].filter(i => i !== at && !own.has(i) && !excluded.has(i));
+    // The new file joins the run: it is no longer excluded from it.
+    const delta = argCost(filters[n]) + fresh.reduce((sum, i) => sum + argCost(excludeArg(i)), 0)
+      - (at !== undefined && excluded.has(at) ? argCost(excludeArg(at)) : 0);
+    if (filterArgs.length > 0 && base + used + delta > limit) {
+      close();
+      own = new Set();
+      excluded = new Set();
+      filterArgs = [];
+      used = 0;
+    }
+    if (at !== undefined) {
+      own.add(at);
+      if (excluded.delete(at)) used -= argCost(excludeArg(at));
+    }
+    for (const i of matches[n]) {
+      if (own.has(i) || excluded.has(i)) continue;
+      excluded.add(i);
+      used += argCost(excludeArg(i));
+    }
+    filterArgs.push(filters[n]);
+    used += argCost(filters[n]);
+  }
+  close();
+  return chunks;
 }
 
 interface Container { kind: string; key: string | undefined }

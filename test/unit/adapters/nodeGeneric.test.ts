@@ -157,3 +157,22 @@ test('a watch-mode test script gets no steps and a hint', async () => {
 test('c8BinPath points into the extension\'s node_modules', () => {
   expect(c8BinPath(path.resolve('/ext'))).toBe(c8);
 });
+
+test('tools that watch by default get their non-watch flag, or the watch hint when it cannot be added', async () => {
+  const run = async (test: string) => {
+    const { project, fs } = await projectOf({ [pkgFile]: pkg({ scripts: { test } }) });
+    return nodeGenericAdapter.plan(project, { kind: 'full' }, ctx(fs));
+  };
+  const tail = async (test: string) => (await run(test)).steps[0].args.slice(C8_ARGS.length);
+  expect(await tail('karma start')).toEqual(['npm', 'run', 'test', '--', '--single-run']);
+  expect(await tail('karma start karma.conf.js')).toEqual(['npm', 'run', 'test', '--', '--single-run']);
+  expect(await tail('ng test')).toEqual(['npm', 'run', 'test', '--', '--watch=false']);
+  expect(await tail('npx ng test --code-coverage')).toEqual(['npm', 'run', 'test', '--', '--watch=false']);
+  for (const test of ['karma start --single-run', 'karma start --no-auto-watch', 'ng test --watch=false', 'ng test --no-watch', 'ng build']) {
+    expect(await tail(test), test).toEqual(['npm', 'run', 'test']);
+  }
+  // The flag would reach the wrong command when the watching tool is not the last one.
+  const hint = (await run('karma start && node report.js')).hint;
+  expect((await run('karma start && node report.js')).steps).toEqual([]);
+  expect(hint).toContain('watch mode');
+});

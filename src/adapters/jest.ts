@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {
-  localBin, NO_TEST_FILES_HINT, NODE_TEST_FILE, packageManagerOf, readPackageJson, relativePosix, scriptCommand, scriptTailCalls,
-  selectedTestFiles, workspaceFolderOf,
+  chunkDir, commandLineLimit, lineLength, localBin, NO_TEST_FILES_HINT, NODE_TEST_FILE, packageManagerOf, readPackageJson, relativePosix, scriptCommand, scriptTailCalls,
+  selectedTestFiles, splitByCost, workspaceFolderOf,
 } from './nodeShared';
 import type { Adapter, FsReader, Project } from './types';
 
@@ -51,25 +51,31 @@ export const jestAdapter: Adapter = {
   async plan(project, target, ctx) {
     const pkg = (await readPackageJson(path.join(project.dir, 'package.json'), ctx.fs)) ?? {};
     const pm = await packageManagerOf(project.dir, ctx.fs, workspaceFolderOf(project));
-    let selection: string[] = [];
+    let chunks: string[][] = [[]];
     if (target.kind === 'partial') {
       const files = await selectedTestFiles(project.dir, target.paths, ctx.fs, ctx.settings.exclude, rel => NODE_TEST_FILE.test(rel));
       if (files.length === 0) return { steps: [], reportSearchDir: ctx.tmpDir, hint: NO_TEST_FILES_HINT };
-      // Positional arguments are regexes ORed with any pattern in the script; --runTestsByPath makes them exact paths.
-      selection = ['--runTestsByPath', ...files.map(p => relativePosix(project.dir, p))];
+      chunks = [files.map(p => relativePosix(project.dir, p))];
     }
-    const args = [
-      '--coverage',
-      '--coverageReporters=json',
-      `--coverageDirectory=${ctx.tmpDir}`,
-      ...ctx.settings.nodeExtraArgs,
-      ...selection,
-    ];
     const call = scriptTailCalls(pkg, JEST_TOOL, JEST_WATCH);
-    const { command, args: fullArgs } = call !== undefined ? scriptCommand(pm, call.script, args) : localBin(pm, 'jest', args);
+    const build = (coverageDir: string, selection: readonly string[]) => {
+      // Positional arguments are regexes ORed with any pattern in the script; --runTestsByPath makes them exact paths.
+      const args = [
+        '--coverage', '--coverageReporters=json', `--coverageDirectory=${coverageDir}`, ...ctx.settings.nodeExtraArgs,
+        ...(target.kind === 'partial' ? ['--runTestsByPath', ...selection] : []),
+      ];
+      return call !== undefined ? scriptCommand(pm, call.script, args) : localBin(pm, 'jest', args);
+    };
+    if (target.kind === 'partial') {
+      // A command line too long for the shell (Windows): several runs, whose reports are unioned.
+      chunks = splitByCost(chunks[0], lineLength(build(chunkDir(ctx.tmpDir, 9999, 2), [])), commandLineLimit(ctx));
+    }
     return {
-      steps: [{ command, args: fullArgs, cwd: project.dir, env: { ...call?.env, CI: 'true' } }],
+      steps: chunks.map((selection, i) => ({
+        ...build(chunkDir(ctx.tmpDir, i + 1, chunks.length), selection), cwd: project.dir, env: { ...call?.env, CI: 'true' },
+      })),
       reportSearchDir: ctx.tmpDir,
+      ...(chunks.length > 1 ? { unionReports: true } : {}),
       hint: HINT,
     };
   },

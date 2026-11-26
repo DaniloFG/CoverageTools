@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { Project, RunTarget } from '../adapters/types';
 import { resolveTarget, type DiscoveryState } from '../discovery';
-import { batchNotices, failureDetails, InFlight, progressMessage, runBatch, type Notice, type RunItem } from '../runner/batch';
+import { batchNotices, failureDetails, InFlight, mergeRunItems, progressMessage, runBatch, type Notice, type RunItem } from '../runner/batch';
 import type { RunQueue } from '../runner/queue';
 import type { RunOutcome } from '../runner/runProject';
 
@@ -54,7 +54,7 @@ async function runHere(deps: CommandDeps, inFlight: InFlight, uri: vscode.Uri | 
     items.push(...resolveTarget(u.fsPath, isDirectory, state));
   }
   if (items.length === 0) return void vscode.window.showInformationMessage('No tests to run here.');
-  await run(deps, inFlight, items);
+  await run(deps, inFlight, mergeRunItems(items));
 }
 
 /**
@@ -65,23 +65,30 @@ async function runHere(deps: CommandDeps, inFlight: InFlight, uri: vscode.Uri | 
 async function run(deps: CommandDeps, inFlight: InFlight, requested: RunItem[]): Promise<void> {
   const items = inFlight.claim(requested);
   if (items.length === 0) return; // All of it is queued or running already.
-  const results = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: 'Coverage Tools', cancellable: true },
-    async (progress, token) => {
-      const cancel = token.onCancellationRequested(() => deps.queue.cancelAll());
-      if (deps.queue.busy) progress.report({ message: 'Waiting for the run in progress…' });
-      try {
-        return await runBatch(items, {
-          queue: deps.queue,
-          inFlight,
-          run: (item, signal) => deps.runProject(item.project, item.target, signal),
-          onStart: (item, n, total) => progress.report({ message: progressMessage(item.project.name, n, total) }),
-        });
-      } finally {
-        cancel.dispose();
-      }
-    },
-  );
+  let results;
+  try {
+    results = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Coverage Tools', cancellable: true },
+      async (progress, token) => {
+        const cancel = token.onCancellationRequested(() => deps.queue.cancelAll());
+        if (deps.queue.busy) progress.report({ message: 'Waiting for the run in progress…' });
+        try {
+          return await runBatch(items, {
+            queue: deps.queue,
+            inFlight,
+            run: (item, signal) => deps.runProject(item.project, item.target, signal),
+            onStart: (item, n, total) => progress.report({ message: progressMessage(item.project.name, n, total) }),
+          });
+        } finally {
+          cancel.dispose();
+        }
+      },
+    );
+  } catch (e) {
+    // The progress notification failed before the runs were queued: nothing else would release the claim.
+    for (const item of items) inFlight.release(item);
+    throw e;
+  }
   for (const r of results) {
     const line = failureDetails(r.item.project.name, r.outcome);
     if (line !== undefined) deps.log(line);
