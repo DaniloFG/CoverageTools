@@ -58,6 +58,13 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
+        "command": "coverageTools.run",
+        "title": "Run Coverage...",
+        "category": "Coverage Tools",
+        "icon": "$(run-coverage)",
+        "enablement": "isWorkspaceTrusted"
+      },
+      {
         "command": "coverageTools.runHere",
         "title": "Run Coverage Here",
         "category": "Coverage Tools",
@@ -90,15 +97,41 @@
       ],
       "view/title": [
         {
-          "command": "coverageTools.runAll",
+          "command": "coverageTools.run",
           "when": "view == workbench.view.testing",
           "group": "navigation@90"
+        },
+        {
+          "command": "coverageTools.runAll",
+          "when": "view == workbench.view.testing",
+          "group": "coverageTools@1"
         }
       ]
     },
     "configuration": {
       "title": "Coverage Tools",
       "properties": {
+        "coverageTools.run.mode": {
+          "type": "string",
+          "enum": [
+            "sequential",
+            "parallel"
+          ],
+          "enumDescriptions": [
+            "One test project at a time. The lightest on the machine, and the right choice on a computer with few processor cores or little memory.",
+            "Several test projects at the same time. Faster, but every extra run takes its own share of processor and memory. How many run at once is limited to what this machine has room for; .NET projects still run one after another."
+          ],
+          "default": "sequential",
+          "scope": "window",
+          "markdownDescription": "Whether test projects run in sequence or in parallel. Sequence is the default so that coverage runs do not take over the machine's processor and memory. In parallel, the number of runs at a time follows `#coverageTools.run.maxParallel#`."
+        },
+        "coverageTools.run.maxParallel": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "scope": "window",
+          "markdownDescription": "In parallel mode, the most test projects that run at the same time. `0` chooses it from this machine: half its processor cores, at most 4. Whatever the value, there are never more runs than the free memory holds (1.5 GB each), and no further run starts while less than 1 GB is free. A machine without that room runs in sequence."
+        },
         "coverageTools.watch.enabled": {
           "type": "boolean",
           "default": true,

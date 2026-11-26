@@ -6,10 +6,12 @@ export interface RunItem { project: Project; target: RunTarget }
 export interface RunResult { item: RunItem; outcome: RunOutcome }
 
 export interface BatchDeps {
-  queue: { enqueue<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> };
+  queue: { enqueue<T>(job: (signal: AbortSignal) => Promise<T>, exclusive?: string): Promise<T> };
   run(item: RunItem, signal: AbortSignal): Promise<RunOutcome>;
   /** The `n`-th item (1-based) of `total` starts; not called for items cancelled before they start. */
   onStart?(item: RunItem, n: number, total: number): void;
+  /** An item `onStart` was called for has settled. */
+  onEnd?(item: RunItem): void;
   /** Items claimed there (see `InFlight.claim`) are released as each one settles. */
   inFlight?: InFlight;
 }
@@ -69,21 +71,35 @@ export function mergeRunItems(items: readonly RunItem[]): RunItem[] {
 }
 
 /**
+ * What two runs must share to be kept from running at the same time, also when the queue runs
+ * several at once. .NET projects: all of them, since each run builds the projects it references
+ * and two builds of one referenced project collide on its `obj` files. Others: the directory,
+ * where the tool keeps its data files.
+ */
+export function exclusiveKey(project: Project): string {
+  return project.ecosystem === 'dotnet' ? 'dotnet' : project.dir;
+}
+
+/**
  * Puts every item on the run queue at once (so later requests queue behind all of them) and
- * resolves with each item's outcome, in order, once all have settled. The queue runs one item at a
- * time; cancelling it settles the rest as `cancelled` without starting them.
+ * resolves with each item's outcome, in the order given, once all have settled. The queue decides
+ * how many run at a time (see `exclusiveKey` for the ones that never do); cancelling it settles
+ * the rest as `cancelled` without starting them.
  */
 export function runBatch(items: readonly RunItem[], deps: BatchDeps): Promise<RunResult[]> {
-  return Promise.all(items.map((item, i) => deps.queue.enqueue(async (signal): Promise<RunResult> => {
+  let started = 0;
+  return Promise.all(items.map(item => deps.queue.enqueue(async (signal): Promise<RunResult> => {
+    const starts = !signal.aborted;
     try {
-      if (!signal.aborted) deps.onStart?.(item, i + 1, items.length);
+      if (starts) deps.onStart?.(item, ++started, items.length);
       return { item, outcome: await deps.run(item, signal) };
     } catch (e) {
       return { item, outcome: { status: 'spawn-error', message: messageOf(e) } };
     } finally {
       deps.inFlight?.release(item);
+      if (starts) deps.onEnd?.(item);
     }
-  })));
+  }, exclusiveKey(item.project))));
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -107,13 +123,15 @@ export function lineLogger(log: (msg: string) => void): { write(chunk: string): 
 /**
  * Runs one item with its output logged line by line, between `Running coverage for <name> (…).`
  * (left out when it was cancelled before it started) and `Finished coverage for <name>: <status>.`,
- * which is always written, also when `start` throws (that counts as a spawn error).
+ * which is always written, also when `start` throws (that counts as a spawn error). With `tagged`,
+ * each output line starts with `[<name>]`: the output of runs made at the same time is interleaved.
  */
 export async function loggedRun(
   item: RunItem, signal: AbortSignal, log: (msg: string) => void, start: (output: (chunk: string) => void) => Promise<RunOutcome>,
+  tagged = false,
 ): Promise<RunOutcome> {
   const { project, target } = item;
-  const lines = lineLogger(log);
+  const lines = lineLogger(tagged ? line => log(`[${project.name}] ${line}`) : log);
   if (!signal.aborted) log(`Running coverage for ${project.name} (${target.kind === 'full' ? 'all tests' : target.paths.join(', ')}).`);
   let outcome: RunOutcome;
   try {
@@ -130,6 +148,36 @@ export async function loggedRun(
 
 export function progressMessage(name: string, n: number, total: number): string {
   return `Running coverage: ${name} (${n}/${total})`;
+}
+
+/** How many runs under way the progress message names before it counts the rest. */
+const NAMED_RUNS = 3;
+
+/** The progress message of a batch whose runs may overlap: the runs under way, and how many of the total have started. */
+export class RunProgress {
+  private readonly running: string[] = [];
+  private started = 0;
+
+  constructor(private readonly total: number) {}
+
+  start(name: string): string {
+    this.running.push(name);
+    this.started++;
+    return this.message();
+  }
+
+  /** Nothing when no run is under way: the next start, or the end of the batch, follows. */
+  end(name: string): string | undefined {
+    const i = this.running.indexOf(name);
+    if (i >= 0) this.running.splice(i, 1);
+    return this.running.length === 0 ? undefined : this.message();
+  }
+
+  private message(): string {
+    const rest = this.running.length - NAMED_RUNS;
+    const names = this.running.slice(0, NAMED_RUNS).join(', ') + (rest > 0 ? ` and ${rest} more` : '');
+    return progressMessage(names, this.started, this.total);
+  }
 }
 
 export interface Notice {

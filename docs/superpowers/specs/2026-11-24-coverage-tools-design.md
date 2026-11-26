@@ -489,7 +489,8 @@ perda, usa-se o botão direito.
 
 | Comando | Onde | O que faz |
 |---------|------|-----------|
-| `Coverage Tools: Run All Coverage` | paleta, título da view de testes | Roda todos os projetos descobertos, um por vez, com progresso e cancelamento |
+| `Coverage Tools: Run Coverage...` | paleta, botão no título da view de testes | Lista os projetos descobertos e roda os que o usuário marcar (ver "Escolha de projetos", seção 5.6) |
+| `Coverage Tools: Run All Coverage` | paleta, menu `...` da view de testes | Roda todos os projetos descobertos, com progresso e cancelamento |
 | `Coverage Tools: Run Coverage Here` | botão direito no Explorer | Roda a cobertura do alvo clicado (ver abaixo) |
 | `Coverage Tools: Show Coverage` | paleta, barra de status | Republica o acumulado (traz a exibição de volta) |
 | `Coverage Tools: Clear Coverage` | paleta | Esvazia o acumulado e fecha a exibição nativa |
@@ -529,7 +530,9 @@ não aparece.
 
 ### 5.6 Execução e erros
 
-- Uma execução por vez; pedidos feitos durante uma execução entram em fila.
+- Por padrão, uma execução por vez; pedidos feitos durante uma execução
+  entram em fila. O modo paralelo é opcional (ver "Sequência ou paralelo",
+  abaixo).
 - A saída dos comandos vai para o canal de saída "Coverage Tools".
 - **Testes falharam mas há relatório:** a cobertura é incorporada e um aviso
   informa que houve falhas.
@@ -544,12 +547,64 @@ não aparece.
   anteriores do projeto são mantidos.
 - **Arquivos do relatório que não existem no disco** são descartados (por
   exemplo, caminhos de build determinístico que não resolvem).
-- Cancelar encerra o processo em execução e esvazia a fila.
+- Cancelar encerra todos os processos em execução e esvazia a fila.
+
+**Escolha de projetos (ajuste de 2026-11-26).** Em um workspace com dezenas
+de projetos, rodar todos não é aceitável como caminho padrão. O caminho
+padrão passa a ser escolher:
+
+- `Run Coverage...` abre uma lista com uma caixa de marcação por projeto,
+  agrupada por pasta do workspace, mostrando o caminho do projeto dentro da
+  pasta e a pilha de testes (`.NET`, `Jest`, `Vitest`, `Node`, `Python`,
+  `Custom command`). Digitar filtra por nome, caminho e pilha.
+- Nada vem marcado na primeira vez. Depois, vêm marcados os projetos rodados
+  da última vez (guardados por workspace; não é cobertura, é só a seleção).
+  Rodar todos não altera essa lembrança.
+- A lista tem dois botões no título: rodar todos, e alternar entre sequência
+  e paralelo. O título diz sempre o modo em vigor e o que ele custa à máquina.
+- Com um único projeto no workspace não há o que escolher: ele é executado.
+- `Run All Coverage` continua existindo, sem pergunta: na paleta, no menu
+  `...` da view de testes e no botão da lista. Ele saiu do botão de um clique
+  da view de testes para que 50 projetos não rodem por engano.
+
+**Sequência ou paralelo (ajuste de 2026-11-26).** O usuário escolhe; o padrão
+é sequência, para não exigir processamento nem memória da máquina. O modo
+paralelo se adapta ao computador em vez de iniciar tudo de uma vez, pensando
+em máquinas com pouca capacidade:
+
+- **Por processador:** no máximo metade dos núcleos ao mesmo tempo, e nunca
+  mais que 4 (ou o valor de `coverageTools.run.maxParallel`). A outra metade
+  fica para o editor e para os núcleos que cada execução de testes já usa.
+- **Por memória:** nunca mais execuções do que a memória livre comporta, a
+  1,5 GB por execução, medida quando a fila sai do repouso (antes de as
+  próprias execuções ocuparem memória). Com menos de 1 GB livre, nenhuma
+  execução adicional começa ao lado das que estão rodando.
+- **Máquina fraca roda em sequência de qualquer modo:** com um ou dois
+  núcleos, ou sem memória sobrando, o modo paralelo roda um projeto por vez e
+  registra isso na saída.
+- **Projetos .NET nunca rodam ao mesmo tempo entre si:** cada execução
+  compila os projetos que referencia, e duas compilações simultâneas do mesmo
+  projeto referenciado falham por arquivo em uso em `obj/`. No modo paralelo
+  eles ainda se sobrepõem a projetos Node e Python.
+- Duas execuções no mesmo diretório de projeto nunca se sobrepõem.
+- No macOS a memória livre não é lida de forma confiável: assume-se metade da
+  memória instalada, sem a retenção durante as execuções.
+- Não há temporizador: a fila reavalia quando uma execução termina.
+
+Abordagens consideradas para o paralelo em .NET: (a) exclusão mútua entre
+projetos .NET, a escolhida, por ser segura sem depender de como cada solução
+compila; (b) compilar em sequência e rodar os testes em paralelo com
+`--no-build`, que daria paralelismo real em .NET mas muda as linhas de
+comando já validadas por execuções reais e não pôde ser verificada sem o SDK
+no ambiente de desenvolvimento; fica como evolução possível; (c) paralelo
+irrestrito, descartado por falhar de forma intermitente.
 
 ### 5.7 Configurações
 
 | Chave | Padrão | Função |
 |-------|--------|--------|
+| `coverageTools.run.mode` | `sequential` | Rodar os projetos em sequência (`sequential`) ou vários ao mesmo tempo (`parallel`); escopo de janela |
+| `coverageTools.run.maxParallel` | `0` (automático) | No modo paralelo, o máximo de execuções simultâneas; `0` escolhe pela máquina (metade dos núcleos, no máximo 4). A memória livre limita em qualquer caso; escopo de janela |
 | `coverageTools.watch.enabled` | `true` | Liga a detecção de execuções externas |
 | `coverageTools.watch.globs` | os padrões da seção 5.3 | Onde procurar relatórios |
 | `coverageTools.exclude` | `**/node_modules/**`, `**/bin/**`, `**/obj/**`, `**/.venv/**`, `**/venv/**`, `**/__pycache__/**` | Ignorado na descoberta e na observação |

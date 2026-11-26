@@ -12,6 +12,7 @@ const repoRoot = resolve(import.meta.dirname, '..', '..');
 const SAMPLES = ['node-jest', 'python-pytest', 'dotnet-vstest-coverlet'];
 const JEST = 'node-jest-sample';
 const RUN_ALL = 'Coverage Tools: Run All Coverage';
+const RUN_PICKED = 'Coverage Tools: Run Coverage...';
 const RUN_HERE = 'Run Coverage Here';
 /** The status bar entry of Coverage Tools (extension ID + item ID). */
 const STATUS_ITEM = '[id="DaniloFG.coverage-tools.coverageTools.status"]';
@@ -55,15 +56,22 @@ async function waitForRuns(count: number, timeoutMs = 120_000): Promise<Array<[s
   return finished(text);
 }
 
-test('Run All Coverage runs every project and the view shows files from all three ecosystems; running one project again keeps the others', async () => {
+/** The project picker of `Run Coverage...`: the quick input, once it carries the picker's title. */
+async function waitForPicker(mode: RegExp = /one project at a time/): Promise<void> {
+  await s.page.locator('.quick-input-widget .quick-input-title', { hasText: mode }).waitFor({ state: 'visible', timeout: 15_000 });
+}
+
+test('the Testing view button opens the project picker; its Run All button runs every project and the view shows files from all three ecosystems; running one project again keeps the others', async () => {
   expect(await startSamples()).toBe(3);
 
-  // The Testing view title offers Run All Coverage; it is the way in here.
+  // The Testing view title offers Run Coverage..., which asks which projects to run; it is the way in here.
   await s.runCommand('View: Show Testing');
   // The Test Explorer is the only view of its container, so its actions are in the side bar title.
-  const button = s.page.locator('.part.sidebar .action-label[aria-label="Run All Coverage"]:visible').first();
+  const button = s.page.locator('.part.sidebar .action-label[aria-label="Run Coverage..."]:visible').first();
   await button.waitFor({ state: 'visible', timeout: 10_000 });
   await button.click();
+  await waitForPicker();
+  await s.page.locator('.quick-input-widget .quick-input-titlebar .action-label.codicon-run-all').click();
   await waitFor(async () => (await notificationTexts(s)).some((t) => /Running coverage: .+ \(\d\/3\)/.test(t)), 30_000, 'the progress notification');
 
   const runs = await waitForRuns(3, DOTNET_RUN_MS);
@@ -179,15 +187,57 @@ test('a run made by the extension is not ingested a second time by the watcher',
   await waitForCoverageRow(s, 'calc.py', '0.00%');
 });
 
-/** Two workspace folders, each a custom-command project. */
-async function startCustom(commands: { a: string; b: string }): Promise<number> {
+/** Two workspace folders, each a custom-command project; `settings` are the workspace's own. */
+async function startCustom(commands: { a: string; b: string }, settings: Record<string, unknown> = {}): Promise<number> {
   const ws = await makeWorkspace({
     'a/.vscode/settings.json': JSON.stringify({ 'coverageTools.commands': { '.': commands.a } }),
     'b/.vscode/settings.json': JSON.stringify({ 'coverageTools.commands': { '.': commands.b } }),
-    'custom.code-workspace': JSON.stringify({ folders: [{ path: 'a' }, { path: 'b' }] }),
+    'custom.code-workspace': JSON.stringify({ folders: [{ path: 'a' }, { path: 'b' }], settings }),
   });
   return start(join(ws, 'custom.code-workspace'), { folders: [join(ws, 'a'), join(ws, 'b')] });
 }
+
+test('Run Coverage... runs only the ticked projects, and has them ticked the next time', async () => {
+  expect(await startCustom({ a: 'exit 3', b: 'exit 3' })).toBe(2);
+  await s.runCommand(RUN_PICKED, { expectQuickInput: true });
+  await waitForPicker();
+  const row = s.page.locator('.quick-input-widget .quick-input-list .monaco-list-row', { has: s.page.locator('.label-name', { hasText: /^b$/ }) });
+  await row.click();
+  await s.page.keyboard.press('Enter');
+  expect(await waitForRuns(1)).toEqual([['b', 'no-report']]);
+  expect(await outputChannelText(s)).not.toContain('Running coverage for a ');
+
+  // Accepting the picker as it opens runs what was run last time.
+  await s.runCommand(RUN_PICKED, { expectQuickInput: true });
+  await waitForPicker();
+  await s.page.keyboard.press('Enter');
+  expect(await waitForRuns(2)).toEqual([['b', 'no-report'], ['b', 'no-report']]);
+  expect(await outputChannelText(s)).not.toContain('Running coverage for a ');
+});
+
+test('dismissing the project picker runs nothing', async () => {
+  expect(await startCustom({ a: 'exit 3', b: 'exit 3' })).toBe(2);
+  await s.runCommand(RUN_PICKED, { expectQuickInput: true });
+  await waitForPicker();
+  await s.page.keyboard.press('Escape');
+  await s.page.locator('.quick-input-widget').waitFor({ state: 'hidden', timeout: 10_000 });
+  expect(await outputChannelText(s)).not.toContain('Running coverage for');
+});
+
+test('in parallel mode the projects run at the same time, and cancelling stops all of them', async () => {
+  expect(await startCustom({ a: 'sleep 120', b: 'sleep 120' }, { 'coverageTools.run.mode': 'parallel', 'coverageTools.run.maxParallel': 2 })).toBe(2);
+  await s.runCommand(RUN_ALL);
+  const text = await waitForOutput(
+    s, (t) => t.includes('Running coverage for a ') && t.includes('Running coverage for b '), 30_000, 'both runs to be under way',
+  );
+  expect(finished(text)).toEqual([]);
+  expect(text).toMatch(/Parallel runs: up to 2 at a time on this machine/);
+  const toast = s.page.locator('.notifications-toasts .notification-list-item', { hasText: 'Running coverage: a, b (2/2)' });
+  await toast.waitFor({ state: 'visible', timeout: 10_000 });
+  await toast.hover();
+  await toast.locator('.monaco-button', { hasText: /^Cancel$/ }).click();
+  expect((await waitForRuns(2, 30_000)).sort()).toEqual([['a', 'cancelled'], ['b', 'cancelled']]);
+});
 
 test('cancelling the progress notification stops the run and empties the queue', async () => {
   expect(await startCustom({ a: 'sleep 120', b: 'sleep 120' })).toBe(2);

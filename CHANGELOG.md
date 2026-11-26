@@ -27,7 +27,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Done
 
-- Nothing yet.
+- `Run Coverage...` lists the test projects of the workspace and runs the
+  ones you tick, so a workspace with many projects no longer has to run all
+  of them. Nothing is ticked the first time; afterwards the projects run last
+  time come ticked. It is now the button in the Testing view title.
+- `Run All Coverage` is kept: Command Palette, the `...` menu of the Testing
+  view, and a button in the `Run Coverage...` list.
+- Sequential or parallel runs, chosen with `coverageTools.run.mode` or the
+  switch button of the `Run Coverage...` list. Sequential stays the default,
+  so that coverage runs do not take over the machine's processor and memory.
+- Parallel runs adapt to the machine: at most half the processor cores (4 at
+  most, or `coverageTools.run.maxParallel`), never more runs than the free
+  memory holds, and no further run while memory is short. A machine with few
+  cores or little memory runs in sequence in either mode. .NET projects always
+  run one after another.
 
 ## [0.1.0] - 2026-11-25
 

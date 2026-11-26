@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isPatch, releaseNotes } from '../../../scripts/release-notes.mjs';
@@ -67,21 +67,42 @@ test('isPatch: only a last number other than 0 is a patch', () => {
   expect(isPatch('abc')).toBe(false);
 });
 
-// The CLI reads the repository's CHANGELOG.md: 0.1.0 has a section, 9.9.0 and 9.9.1 have none.
-function cli(version: string, mode: string) {
+/**
+ * Runs the CLI. With `changelog`, on a file holding that text; without, on the repository's own
+ * CHANGELOG.md, whose Unreleased list changes with every pull request (only 0.1.0 is stable there).
+ */
+function cli(version: string, mode: string, changelog?: string) {
   const dir = mkdtempSync(path.join(tmpdir(), 'release-notes-'));
   const out = path.join(dir, 'notes.md');
-  const result = spawnSync('node', [path.resolve(__dirname, '../../../scripts/release-notes.mjs'), version, out, mode], { encoding: 'utf8' });
+  const args = [path.resolve(__dirname, '../../../scripts/release-notes.mjs'), version, out, mode];
+  if (changelog !== undefined) {
+    writeFileSync(path.join(dir, 'CHANGELOG.md'), changelog);
+    args.push(path.join(dir, 'CHANGELOG.md'));
+  }
+  const result = spawnSync('node', args, { encoding: 'utf8' });
   const body = result.status === 0 ? readFileSync(out, 'utf8') : '';
   rmSync(dir, { recursive: true, force: true });
   return { status: result.status, body, stderr: result.stderr };
 }
 
+/** A changelog with nothing waiting for a release. */
+const NOTHING_DONE = HEADER + unreleased('- Nothing yet.\n\n') + released;
+
 test('auto mode: a patch without a section gets a note, a minor/major without one fails', () => {
-  expect(cli('9.9.1', 'auto')).toMatchObject({ status: 0 });
-  expect(cli('9.9.1', 'auto').body).toMatch(/\S/);
-  expect(cli('9.9.0', 'auto').status).toBe(1);
-  expect(cli('9.0.0', 'auto').stderr).toMatch(/nothing to say/i);
-  expect(cli('0.1.0', 'auto').status).toBe(0);
-  expect(cli('9.9.1', 'bogus').status).toBe(1);
+  expect(cli('9.9.1', 'auto', NOTHING_DONE)).toMatchObject({ status: 0, body: 'Maintenance release.\n' });
+  expect(cli('9.9.0', 'auto', NOTHING_DONE).status).toBe(1);
+  expect(cli('9.0.0', 'auto', NOTHING_DONE).stderr).toMatch(/nothing to say/i);
+  expect(cli('9.9.1', 'bogus', NOTHING_DONE).status).toBe(1);
+});
+
+test('auto mode: a version without a section ships the Done list when there is one, patch or not', () => {
+  const changelog = HEADER + unreleased('- Done thing.\n\n') + released;
+  expect(cli('9.9.1', 'auto', changelog)).toMatchObject({ status: 0, body: '- Done thing.\n' });
+  expect(cli('9.9.0', 'auto', changelog)).toMatchObject({ status: 0, body: '- Done thing.\n' });
+});
+
+test('without a changelog file the CLI reads the repository\'s CHANGELOG.md', () => {
+  const result = cli('0.1.0', 'auto');
+  expect(result.status).toBe(0);
+  expect(result.body).toMatch(/^### Added/);
 });

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DEFAULT_SETTINGS, type Settings } from '../settings';
+import { DEFAULT_SETTINGS, runSettingsFrom, type RunSettings, type Settings } from '../settings';
 
 function stringArray(value: unknown, fallback: string[]): string[] {
   return Array.isArray(value) && value.every(v => typeof v === 'string') ? [...value] : [...fallback];
@@ -34,4 +34,20 @@ export function readSettings(scope?: vscode.Uri): Settings {
     pythonExtraArgs: stringArray(c.get('python.extraArgs'), d.pythonExtraArgs),
     commands: stringRecord(c.get('commands'), d.commands),
   };
+}
+
+/** The `coverageTools.run.*` settings, which apply to the whole window. */
+export function readRunSettings(): RunSettings {
+  const c = vscode.workspace.getConfiguration('coverageTools');
+  return runSettingsFrom(c.get('run.mode'), c.get('run.maxParallel'));
+}
+
+/**
+ * Stores the run mode where the user already keeps it (the workspace's settings when it is set
+ * there, otherwise the user's own), so the choice made in the picker is the one that takes effect.
+ */
+export async function writeRunMode(mode: RunSettings['mode']): Promise<void> {
+  const c = vscode.workspace.getConfiguration('coverageTools');
+  const inWorkspace = c.inspect('run.mode')?.workspaceValue !== undefined;
+  await c.update('run.mode', mode, inWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
 }

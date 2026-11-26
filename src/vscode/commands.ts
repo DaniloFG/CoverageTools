@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import type { Project, RunTarget } from '../adapters/types';
 import { resolveTarget, type DiscoveryState } from '../discovery';
-import { batchNotices, failureDetails, InFlight, mergeRunItems, progressMessage, runBatch, type Notice, type RunItem } from '../runner/batch';
+import { batchNotices, failureDetails, InFlight, mergeRunItems, runBatch, RunProgress, type Notice, type RunItem } from '../runner/batch';
 import type { RunQueue } from '../runner/queue';
 import type { RunOutcome } from '../runner/runProject';
+import type { RunSettings } from '../settings';
+import { pickProjects } from './projectPicker';
 
 export interface CommandDeps {
   discovery: { readonly ready: Promise<void>; readonly current: DiscoveryState | undefined };
@@ -12,14 +14,20 @@ export interface CommandDeps {
   log(msg: string): void;
   showOutput(): void;
   isTrusted(): boolean;
+  /** The keys of the projects run from the picker last time, kept per workspace. */
+  picked: { get(): readonly string[]; set(keys: readonly string[]): PromiseLike<void> };
+  runMode: { get(): RunSettings['mode']; set(mode: RunSettings['mode']): Promise<void> };
 }
 
 const UNTRUSTED = 'Coverage Tools runs no tests in an untrusted workspace.';
 
-/** `Run All Coverage` and `Run Coverage Here`. */
+const NO_PROJECTS = 'No test projects found in this workspace.';
+
+/** `Run Coverage...`, `Run All Coverage` and `Run Coverage Here`. */
 export function registerCommands(deps: CommandDeps): vscode.Disposable {
   const inFlight = new InFlight();
   return vscode.Disposable.from(
+    vscode.commands.registerCommand('coverageTools.run', () => runPicked(deps, inFlight)),
     vscode.commands.registerCommand('coverageTools.runAll', () => runAll(deps, inFlight)),
     vscode.commands.registerCommand('coverageTools.runHere', (uri?: vscode.Uri, selected?: vscode.Uri[]) => runHere(deps, inFlight, uri, selected)),
   );
@@ -30,8 +38,31 @@ async function runAll(deps: CommandDeps, inFlight: InFlight): Promise<void> {
   if (!deps.isTrusted()) return void vscode.window.showWarningMessage(UNTRUSTED);
   await deps.discovery.ready;
   const projects = deps.discovery.current?.projects ?? [];
-  if (projects.length === 0) return void vscode.window.showInformationMessage('No test projects found in this workspace.');
+  if (projects.length === 0) return void vscode.window.showInformationMessage(NO_PROJECTS);
   await run(deps, inFlight, projects.map(project => ({ project, target: { kind: 'full' } })));
+}
+
+/**
+ * Runs the projects ticked in the picker. A workspace with a single project has nothing to choose
+ * from and runs it. The ticks are remembered for the next time, unless everything was run.
+ */
+async function runPicked(deps: CommandDeps, inFlight: InFlight): Promise<void> {
+  if (!deps.isTrusted()) return void vscode.window.showWarningMessage(UNTRUSTED);
+  await deps.discovery.ready;
+  const projects = deps.discovery.current?.projects ?? [];
+  if (projects.length === 0) return void vscode.window.showInformationMessage(NO_PROJECTS);
+  let chosen: readonly Project[] | undefined = projects;
+  if (projects.length > 1) {
+    chosen = await pickProjects(projects, {
+      folders: (vscode.workspace.workspaceFolders ?? []).map(f => ({ name: f.name, fsPath: f.uri.fsPath })),
+      remembered: deps.picked.get(),
+      mode: deps.runMode.get,
+      setMode: deps.runMode.set,
+    });
+    if (chosen === undefined || chosen.length === 0) return;
+    if (chosen.length < projects.length) await deps.picked.set(chosen.map(p => p.key));
+  }
+  await run(deps, inFlight, chosen.map(project => ({ project, target: { kind: 'full' } })));
 }
 
 async function runHere(deps: CommandDeps, inFlight: InFlight, uri: vscode.Uri | undefined, selected: vscode.Uri[] | undefined): Promise<void> {
@@ -60,7 +91,7 @@ async function runHere(deps: CommandDeps, inFlight: InFlight, uri: vscode.Uri | 
 /**
  * Runs the items through the shared queue under one cancellable progress notification; requests made
  * meanwhile queue behind them, without the runs already queued or running. Cancelling stops the
- * running process and empties the whole queue.
+ * running processes and empties the whole queue.
  */
 async function run(deps: CommandDeps, inFlight: InFlight, requested: RunItem[]): Promise<void> {
   const items = inFlight.claim(requested);
@@ -72,12 +103,17 @@ async function run(deps: CommandDeps, inFlight: InFlight, requested: RunItem[]):
       async (progress, token) => {
         const cancel = token.onCancellationRequested(() => deps.queue.cancelAll());
         if (deps.queue.busy) progress.report({ message: 'Waiting for the run in progress…' });
+        const under = new RunProgress(items.length);
         try {
           return await runBatch(items, {
             queue: deps.queue,
             inFlight,
             run: (item, signal) => deps.runProject(item.project, item.target, signal),
-            onStart: (item, n, total) => progress.report({ message: progressMessage(item.project.name, n, total) }),
+            onStart: item => progress.report({ message: under.start(item.project.name) }),
+            onEnd: item => {
+              const message = under.end(item.project.name);
+              if (message !== undefined) progress.report({ message });
+            },
           });
         } finally {
           cancel.dispose();

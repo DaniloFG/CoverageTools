@@ -1,8 +1,9 @@
 import { expect, test } from 'vitest';
 import type { Project, RunTarget } from '../../../src/adapters/types';
 import {
-  batchNotices, failureDetails, InFlight, lineLogger, loggedRun, mergeRunItems, outcomeNotice, progressMessage, runBatch, type RunItem,
+  batchNotices, exclusiveKey, failureDetails, InFlight, lineLogger, loggedRun, mergeRunItems, outcomeNotice, progressMessage, runBatch, RunProgress, type RunItem,
 } from '../../../src/runner/batch';
+import { ParallelGovernor, type Machine } from '../../../src/runner/capacity';
 import { RunQueue } from '../../../src/runner/queue';
 import type { RunOutcome } from '../../../src/runner/runProject';
 
@@ -264,4 +265,99 @@ test('a run that only missed its coverage threshold says so, not "Tests failed"'
     { severity: 'warning', text: 'Tests failed in c; coverage was still loaded.', showOutput: false },
     { severity: 'warning', text: 'Coverage threshold not met in a, b; coverage was still loaded.', showOutput: false },
   ]);
+});
+
+const dotnet = (name: string, adapter: 'dotnet-vstest' | 'dotnet-mtp' = 'dotnet-vstest'): RunItem => ({
+  project: { ...project(name), adapter, ecosystem: 'dotnet', key: `project:/w/${name}/${name}.csproj`, definingFile: `/w/${name}/${name}.csproj` },
+  target: full,
+});
+
+test('.NET projects share one exclusive key (their builds write to the projects they reference); others have their directory', () => {
+  expect(exclusiveKey(dotnet('Api.Tests').project)).toBe('dotnet');
+  expect(exclusiveKey(dotnet('Web.Tests', 'dotnet-mtp').project)).toBe('dotnet');
+  expect(exclusiveKey(project('web'))).toBe('/w/web');
+  expect(exclusiveKey({ ...project('jobs'), adapter: 'python', ecosystem: 'python' })).toBe('/w/jobs');
+});
+
+test('on a queue that admits it, runBatch runs items at once, but never two .NET projects nor two runs in one directory', async () => {
+  const queue = new RunQueue({ more: () => true });
+  const runner = fakeRunner();
+  const partial: RunItem = { project: project('web'), target: { kind: 'partial', paths: ['/w/web/a.test.js'] } };
+  const done = runBatch([dotnet('Api.Tests'), dotnet('Core.Tests'), item('web'), partial, item('jobs')], { queue, run: runner.run });
+  await tick();
+  expect(runner.calls.map(c => c.name)).toEqual(['Api.Tests', 'web', 'jobs']);
+  runner.calls[0].settle({ status: 'ok' });
+  runner.calls[1].settle({ status: 'ok' });
+  await tick();
+  expect(runner.calls.map(c => c.name)).toEqual(['Api.Tests', 'web', 'jobs', 'Core.Tests', 'web']);
+  for (const call of runner.calls) call.settle({ status: 'ok' });
+  // Results keep the order of the request, whatever order the runs ended in.
+  expect((await done).map(r => r.item.project.name)).toEqual(['Api.Tests', 'Core.Tests', 'web', 'web', 'jobs']);
+});
+
+test('onEnd is told as each started item settles, and not for items cancelled before they started', async () => {
+  const queue = new RunQueue();
+  const runner = fakeRunner();
+  const log: string[] = [];
+  const done = runBatch([item('a'), item('b'), item('c')], {
+    queue, run: runner.run, onStart: it => log.push(`start ${it.project.name}`), onEnd: it => log.push(`end ${it.project.name}`),
+  });
+  await tick();
+  runner.calls[0].settle({ status: 'ok' });
+  await tick();
+  queue.cancelAll();
+  await done;
+  expect(log).toEqual(['start a', 'end a', 'start b', 'end b']);
+});
+
+test('RunProgress names the runs under way and counts the ones started', () => {
+  const p = new RunProgress(5);
+  expect(p.start('a')).toBe('Running coverage: a (1/5)');
+  expect(p.start('b')).toBe('Running coverage: a, b (2/5)');
+  expect(p.end('a')).toBe('Running coverage: b (2/5)');
+  expect(p.start('c')).toBe('Running coverage: b, c (3/5)');
+  expect(p.start('d')).toBe('Running coverage: b, c, d (4/5)');
+  expect(p.start('e')).toBe('Running coverage: b, c, d and 1 more (5/5)');
+  expect(p.end('b')).toBe('Running coverage: c, d, e (5/5)');
+});
+
+test('RunProgress has nothing to say when the last run under way ends; one at a time it reads as n/N', () => {
+  const p = new RunProgress(2);
+  expect(p.start('a')).toBe(progressMessage('a', 1, 2));
+  expect(p.end('a')).toBeUndefined();
+  expect(p.start('b')).toBe('Running coverage: b (2/2)');
+  expect(p.end('b')).toBeUndefined();
+});
+
+/** The queue as the extension builds it, on a machine with these cores and this much free memory. */
+function governedQueue(mode: 'sequential' | 'parallel', cores: number, freeGib: number) {
+  const machine: Machine = { cores, totalMemory: 16 * 1024 ** 3, freeMemory: freeGib * 1024 ** 3 };
+  return new RunQueue(new ParallelGovernor({ settings: () => ({ mode, maxParallel: 0 }), machine: () => machine, log: () => undefined }));
+}
+
+async function startedAtOnce(queue: RunQueue): Promise<string[]> {
+  const runner = fakeRunner();
+  const done = runBatch(['a', 'b', 'c', 'd'].map(item), { queue, run: runner.run });
+  await tick();
+  const names = runner.calls.map(c => c.name);
+  queue.cancelAll();
+  await done;
+  return names;
+}
+
+test('parallel mode starts as many projects as the machine has room for; sequential mode and weak machines start one', async () => {
+  expect(await startedAtOnce(governedQueue('parallel', 4, 12))).toEqual(['a', 'b']);
+  expect(await startedAtOnce(governedQueue('parallel', 8, 12))).toEqual(['a', 'b', 'c', 'd']);
+  expect(await startedAtOnce(governedQueue('sequential', 8, 12))).toEqual(['a']);
+  expect(await startedAtOnce(governedQueue('parallel', 2, 12))).toEqual(['a']);
+  expect(await startedAtOnce(governedQueue('parallel', 8, 2))).toEqual(['a']);
+});
+
+test('loggedRun can tag each output line with the project, so the output of runs made at once can be told apart', async () => {
+  const logs: string[] = [];
+  await loggedRun(item('web'), new AbortController().signal, m => logs.push(m), async output => {
+    output('one\ntwo');
+    return { status: 'ok' };
+  }, true);
+  expect(logs).toEqual(['Running coverage for web (all tests).', '[web] one', '[web] two', 'Finished coverage for web: ok.']);
 });
