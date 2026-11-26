@@ -77,6 +77,7 @@ function fake(opts: {
     store: { replace: (key, files) => f.stored.push([key, files]) },
     keyOf: (coverageFile, signature) => `key:${coverageFile}#${signature}`,
     roots: () => ['/work'],
+    platform: 'linux',
     log: msg => f.logs.push(msg),
     signal: opts.signal ?? new AbortController().signal,
     timers: {
@@ -154,6 +155,14 @@ test('python3 that cannot be spawned falls back to python', async () => {
   expect(f.logs).toEqual([]);
 });
 
+test('on Windows the py launcher is tried first, then python and python3', async () => {
+  const f = fake({ python: 'py', exec: async spec => { throw new Error(`spawn ${spec.command} ENOENT`); } });
+  f.deps.platform = 'win32';
+  expect(await ingestCoverageData(DATA, f.deps)).toBe('drop');
+  expect(f.execs.map(s => s.command)).toEqual(['py', 'python', 'python3']);
+  expect(f.logs[0]).toContain('none of "py", "python", "python3" could be started');
+});
+
 test('no interpreter can be spawned: logged, the store is untouched and the temp dir removed', async () => {
   const f = fake({ python: 'python3', exec: async spec => { throw new Error(`spawn ${spec.command} ENOENT`); } });
   expect(await ingestCoverageData(DATA, f.deps)).toBe('drop');
@@ -161,7 +170,7 @@ test('no interpreter can be spawned: logged, the store is untouched and the temp
   expect(f.stored).toEqual([]);
   expect(f.removed).toEqual([TMP]);
   expect(f.logs).toHaveLength(1);
-  expect(f.logs[0]).toContain('neither "python3" nor "python" could be started');
+  expect(f.logs[0]).toContain('none of "python3", "python" could be started');
   expect(f.logs[0]).toContain('spawn python3 ENOENT');
   expect(f.logs[0]).not.toContain('spawn python ENOENT');
   expect(f.logs[0]).toContain('coverageTools.python.interpreter');

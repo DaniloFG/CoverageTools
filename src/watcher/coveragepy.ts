@@ -38,6 +38,8 @@ export interface CoverageDataDeps {
   /** The store key of the data file's coverage: the owning project's key, else an `unowned:` key. */
   keyOf(coverageFile: string, signature: string): string;
   roots(): readonly string[];
+  /** The platform whose default interpreters are tried in turn (tests); defaults to `process.platform`. */
+  platform?: NodeJS.Platform;
   log(msg: string): void;
   /** Aborted when the watcher is disposed: a running conversion is killed. */
   signal: AbortSignal;
@@ -69,6 +71,7 @@ export async function ingestCoverageData(coverageFile: string, deps: CoverageDat
     const xml = path.join(tmpDir, 'coverage.xml');
     let output = '';
     const spawnErrors: string[] = [];
+    const triedInterpreters: string[] = [];
     // Aborted on dispose and on timeout; the timer is cleared as soon as the conversion ends.
     const run = new AbortController();
     const dir = tmpDir;
@@ -92,9 +95,10 @@ export async function ingestCoverageData(coverageFile: string, deps: CoverageDat
           return await deps.exec(conversionSpec(coverageFile, xml, p), { onOutput: chunk => { output += chunk; }, signal: run.signal });
         } catch (e) {
           spawnErrors.push(`${p}: ${messageOf(e)}`);
+          triedInterpreters.push(p);
           return undefined;
         }
-      });
+      }, deps.platform);
     } finally {
       deps.timers.clear(timer);
       deps.signal.removeEventListener('abort', stop);
@@ -107,7 +111,8 @@ export async function ingestCoverageData(coverageFile: string, deps: CoverageDat
       return 'drop';
     }
     if (result === undefined) {
-      const which = spawnErrors.length > 1 ? 'neither "python3" nor "python" could be started' : `the Python interpreter "${python}" could not be started`;
+      const tried = triedInterpreters.map(p => `"${p}"`);
+      const which = tried.length > 1 ? `none of ${tried.join(', ')} could be started` : `the Python interpreter "${python}" could not be started`;
       deps.log(`${failed}: ${which} (${spawnErrors[0] ?? 'unknown error'}). Set "coverageTools.python.interpreter" to the interpreter of this project's environment.`);
       return 'drop';
     }
